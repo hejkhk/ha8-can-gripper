@@ -156,6 +156,104 @@ class HA8Protocol:
     """Construct HA8 request packets. No serial/CAN code lives here."""
 
     @staticmethod
+    def reset_user_data(servo_id: int) -> bytes:
+        """Restore user configuration, including servo ID=0. Dangerous."""
+        if not 0 <= servo_id <= 254:
+            raise ValueError("Servo ID must be 0..254")
+        return build_request(CMD_RESET_USER_DATA, struct.pack("<B", servo_id))
+
+    @staticmethod
+    def begin_async() -> bytes:
+        """0x12: cache next angle command. Firmware V316+ compatibility required."""
+        return build_request(CMD_BEGIN_ASYNC)
+
+    @staticmethod
+    def end_async(cancel: bool = False) -> bytes:
+        """0x13: commit (cancel=0) or discard (cancel=1) cached motion."""
+        return build_request(CMD_END_ASYNC, struct.pack("<B", int(bool(cancel))))
+
+    @staticmethod
+    def sync_raw(content: bytes) -> bytes:
+        """0x19 raw payload. Caller must verify payload layout for installed firmware."""
+        return build_request(CMD_SYNC, content)
+
+    @staticmethod
+    def sync_motion(
+        targets: list[tuple[int, float]],
+        multiturn: bool = False,
+        mode: str = "velocity",
+        interval_ms: int = 2000,
+        velocity_dps: float = 120,
+        t_acc_ms: int = 200,
+        t_dec_ms: int = 200,
+        power_mw: int = 5000,
+    ) -> bytes:
+        """Build 0x19 sync command per FashionStar MicroPython SDK.
+
+        CONTENT = command_id:uint8, per_servo_block_len:uint8,
+                  servo_count:uint8, concatenated servo blocks.
+        Firmware V316+ required; actual HA8 compatibility must be tested.
+        """
+        if not targets or len(targets)>12:
+            raise ValueError("同步目标需要 1~12 颗舵机")
+        if len({sid for sid,_ in targets}) != len(targets):
+            raise ValueError("同步目标舵机 ID 不得重复")
+        power_mw=int(power_mw)
+        if not 0<=power_mw<=65535:
+            raise ValueError("功率范围 0~65535mW")
+        interval_ms=int(interval_ms)
+        t_acc_ms=int(t_acc_ms)
+        t_dec_ms=int(t_dec_ms)
+        velocity_raw=int(round(float(velocity_dps)*10))
+        if not (0<=t_acc_ms<=65535 and 0<=t_dec_ms<=65535):
+            raise ValueError("加减速时间必须为 0~65535ms")
+        if mode=="velocity" and not (10<=velocity_raw<=7500):
+            raise ValueError("速度范围 1~750 °/s")
+        if mode not in ("simple","interval","velocity"):
+            raise ValueError("模式仅支持 simple / interval / velocity")
+
+        if multiturn:
+            cmd={"simple":CMD_SET_MTURN_ANGLE,"interval":CMD_SET_MTURN_ANGLE_BY_INTERVAL,"velocity":CMD_SET_MTURN_ANGLE_BY_VELOCITY}[mode]
+        else:
+            cmd={"simple":CMD_SET_ANGLE,"interval":CMD_SET_ANGLE_BY_INTERVAL,"velocity":CMD_SET_ANGLE_BY_VELOCITY}[mode]
+
+        parts=[]
+        for sid,deg in targets:
+            if not 0<=sid<=254:
+                raise ValueError("舵机 ID 必须为 0..254")
+            if not (-368640<=float(deg)<=368640 if multiturn else -180<=float(deg)<=180):
+                raise ValueError("同步目标角度超出当前单圈/多圈范围")
+            angle=int(round(float(deg)*10))
+            if mode=="simple":
+                if not 0<=interval_ms<=(0xFFFFFFFF if multiturn else 65535):
+                    raise ValueError("运动时间超出协议可表示范围")
+                fmt="<BiIH" if multiturn else "<BhHH"
+                part=struct.pack(fmt,sid,angle,interval_ms,power_mw)
+            elif mode=="interval":
+                if interval_ms<t_acc_ms+t_dec_ms:
+                    raise ValueError("总时长必须不少于加速时间+减速时间")
+                if not 0<=interval_ms<=(0xFFFFFFFF if multiturn else 65535):
+                    raise ValueError("运动时间超出范围")
+                fmt="<BiIHHH" if multiturn else "<BhHHHH"
+                part=struct.pack(fmt,sid,angle,interval_ms,t_acc_ms,t_dec_ms,power_mw)
+            else:
+                fmt="<BiHHHH" if multiturn else "<BhHHHH"
+                part=struct.pack(fmt,sid,angle,velocity_raw,t_acc_ms,t_dec_ms,power_mw)
+            parts.append(part)
+        block_len=len(parts[0])
+        payload=struct.pack("<BBB",cmd,block_len,len(parts))+b"".join(parts)
+        return build_request(CMD_SYNC,payload)
+
+    @staticmethod
+    def sync_monitor(servo_ids: list[int]) -> bytes:
+        """0x19 sync monitor payload from official MicroPython SDK."""
+        if not servo_ids or len(servo_ids)>32:
+            raise ValueError("同步监控 ID 个数 1..32")
+        if len(set(servo_ids))!=len(servo_ids) or not all(0<=sid<=254 for sid in servo_ids):
+            raise ValueError("同步监控 ID 需唯一且在 0..254")
+        return build_request(CMD_SYNC,bytes((CMD_MONITOR,1,len(servo_ids)))+bytes(servo_ids))
+
+    @staticmethod
     def ping(servo_id: int) -> bytes:
         return build_request(CMD_PING, struct.pack("<B", servo_id))
 
@@ -349,8 +447,7 @@ def decode_response(frame: bytes) -> HA8Response:
         fields["angle_deg"] = angle_raw / 10.0
         fields["turn"] = turn
 
-    elif cmd == CMD_MONITOR and len(content) >= struct.calcsize("<BHHHHBih"):
-        sid, voltage, current, power, temp_raw, status, angle_raw, turn = struct.unpack(
+    elif cmd == CMD_MONITOR and len(content) >= struct.calcsize("<BHHHHBih"):        sid, voltage, current, power, temp_raw, status, angle_raw, turn = struct.unpack(
             "<BHHHHBih", content[:struct.calcsize("<BHHHHBih")]
         )
         fields.update({
@@ -369,6 +466,12 @@ def decode_response(frame: bytes) -> HA8Response:
         sid = content[0]
         fields["address"] = content[1]
         fields["data"] = content[2:]
+
+    elif cmd == CMD_WRITE_DATA and len(content) >= 3:
+        sid, address, result = struct.unpack("<BBB", content[:3])
+        fields["address"] = address
+        fields["write_ok"] = result == 1
+        fields["result_raw"] = result
 
     else:
         fields["data"] = content[1:] if len(content) >= 1 else b""
