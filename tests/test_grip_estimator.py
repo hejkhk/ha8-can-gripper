@@ -86,6 +86,34 @@ class GripTests(unittest.TestCase):
                         (.4, 4, .6), (.5, 4, .6), (.6, 4, .6), (.9, 4, .6)])
         self.assertEqual(d.state, GripState.CLOSING)
 
+    def test_armed_but_no_samples_times_out(self):
+        d = self.make(stale_seconds=.8)
+        d.arm(now=10.)
+        self.assertEqual(d.check_stale(10.9).state, GripState.STALE)
+        self.assertEqual(d.observe(GripSample(11., 4, .7)).state, GripState.STALE)
+
+    def test_gap_requires_rearm(self):
+        d = self.make(stale_seconds=.8)
+        d.arm()
+        d.observe(GripSample(0, 0, .1))
+        self.assertEqual(d.observe(GripSample(2., 3, .8)).state, GripState.STALE)
+        self.assertEqual(d.observe(GripSample(2.1, 3, .8)).state, GripState.STALE)
+
+    def test_raw_current_spike_not_masked_by_median(self):
+        d = self.make(maximum_safe_current_a=1.0)
+        d.arm()
+        d.observe(GripSample(0, 0, .1))
+        self.assertEqual(d.observe(GripSample(.1, 3, 1.2)).state, GripState.FAULT)
+
+    def test_loss_of_contact_reverts_to_closing(self):
+        d = self.make()
+        d.arm()
+        self.series(d, [(0,0,.1), (.1,2,.1),(.2,2,.7),(.3,2,.7),(.4,2,.7),(.5,2,.7)])
+        self.assertIn(d.state, (GripState.CONTACT, GripState.CLOSING))
+        # Let median current drop; previous contact must not remain latched.
+        self.series(d,[(.6,2,.1),(.7,2,.1),(.8,2,.1),(.9,2,.1),(1,2,.1)])
+        self.assertEqual(d.state, GripState.CLOSING)
+
     def test_stale(self):
         d = self.make(stale_seconds=.8)
         d.arm()
