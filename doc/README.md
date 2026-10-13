@@ -7,7 +7,7 @@
 - [CAN_protocol_robot_arm.md](CAN_protocol_robot_arm.md)：机械臂集成端发送帧、角度查询、运动指令、调零。
 - [CTS100M_configuration.md](CTS100M_configuration.md)：CTS100M 波特率、标准帧、滤波和终端连接。
 - [HA8_official_reference.md](HA8_official_reference.md)：舵机官方资料、参数、原厂链接以及已上传手册索引。
-- [torque_current_notes.md](torque_current_notes.md)：电流与扭矩估算的限制与抓稳检测建议。
+- [torque_current_notes.md](torque_current_notes.md)：电流与扭矩估算的限制与抓稳检测建议。\n- [grip_current_torque.md](grip_current_torque.md)：V3.1 实验性动态扭矩插值、夹持状态机、阈值与操作步骤。
 
 ## 原始 PDF 归档
 
