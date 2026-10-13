@@ -40,9 +40,10 @@ from ha8_protocol import (
     CMD_MONITOR,
 )
 from ha8_serial import HA8SerialTransport
+from grip_panel import GripPanel
 
 APP_TITLE = "HA8-U35H-M 全功能测试上位机"
-APP_VERSION = "3.0-beta"
+APP_VERSION = "3.1-beta"
 
 
 class HA8UpperComputer(tk.Tk):
@@ -116,6 +117,7 @@ class HA8UpperComputer(tk.Tk):
 
         self.tab_control = ttk.Frame(self.nb, padding=10)
         self.tab_monitor = ttk.Frame(self.nb, padding=10)
+        self.tab_grip = ttk.Frame(self.nb, padding=10)
         self.tab_maint = ttk.Frame(self.nb, padding=10)
         self.tab_scan = ttk.Frame(self.nb, padding=10)
         self.tab_config = ttk.Frame(self.nb, padding=10)
@@ -125,6 +127,7 @@ class HA8UpperComputer(tk.Tk):
 
         self.nb.add(self.tab_control, text="位置控制")
         self.nb.add(self.tab_monitor, text="数据监控")
+        self.nb.add(self.tab_grip, text="夹持检测（实验性）")
         self.nb.add(self.tab_maint, text="停止 / 标定")
         self.nb.add(self.tab_scan, text="通讯检测")
         self.nb.add(self.tab_config, text="参数读写")
@@ -134,6 +137,8 @@ class HA8UpperComputer(tk.Tk):
 
         self._build_control_tab()
         self._build_monitor_tab()
+        self.grip_panel = GripPanel(self.tab_grip, self)
+        self.grip_panel.pack(fill="both", expand=True)
         self._build_maint_tab()
         self._build_scan_tab()
         self._build_config_tab()
@@ -268,6 +273,8 @@ class HA8UpperComputer(tk.Tk):
         rows = [
             ("电压", "voltage"),
             ("电流", "current"),
+            ("输出轴动态参考扭矩", "torque_ref"),
+            ("夹持状态", "grip_state"),
             ("功率", "power"),
             ("温度", "temperature"),
             ("温度ADC", "temp_raw"),
@@ -511,6 +518,7 @@ class HA8UpperComputer(tk.Tk):
         self.serial_baud_combo.configure(state="readonly")
         self.online_var.set("舵机：未知")
         self.online_label.configure(style="")
+        self.grip_panel.stop()
         self.log("官方 USB 串口已断开")
 
     # ---------- helpers ----------
@@ -934,7 +942,15 @@ class HA8UpperComputer(tk.Tk):
             self.monitor_vars["turn"].set(str(f["turn"]))
 
         if "voltage_mv" in f:
-            self.samples.append((time.time(),rsp.servo_id,f["voltage_mv"],f["current_ma"],f["power_mw"],f["temperature_adc"],f["status"],f["angle_deg"],f["turn"]))
+            grip_result=self.grip_panel.on_monitor(rsp.servo_id,f)
+            self.samples.append((
+                time.time(),rsp.servo_id,f["voltage_mv"],f["current_ma"],f["power_mw"],
+                f["temperature_adc"],f["status"],f["angle_deg"],f["turn"],
+                "" if grip_result is None or grip_result.dynamic_torque_nm is None else round(grip_result.dynamic_torque_nm,5),
+                "" if grip_result is None or grip_result.angle_speed_dps is None else round(grip_result.angle_speed_dps,5),
+                "" if grip_result is None else grip_result.state.value,
+                "" if grip_result is None else grip_result.note,
+            ))
             if len(self.samples)>20000:
                 self.samples=self.samples[-20000:]
             self.online_var.set(f"舵机：在线 ID={rsp.servo_id}")
@@ -960,7 +976,7 @@ class HA8UpperComputer(tk.Tk):
         if not path:return
         with open(path,"w",encoding="utf-8-sig",newline="") as fh:
             writer=csv.writer(fh)
-            writer.writerow(["timestamp_s","servo_id","voltage_mV","current_mA","power_mW","temperature_ADC","status_raw","angle_deg","turn"])
+            writer.writerow(["timestamp_s","servo_id","voltage_mV","current_mA","power_mW","temperature_ADC","status_raw","angle_deg","turn","dynamic_torque_ref_Nm","angle_speed_dps","grip_state","grip_note"])
             writer.writerows(self.samples)
         self.log(f"CSV 监控数据已保存：{path}，{len(self.samples)} 行")
 
