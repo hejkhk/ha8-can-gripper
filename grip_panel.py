@@ -159,6 +159,10 @@ class GripPanel(ttk.Frame):
         self.last_logged_state=GripState.IDLE
         self._render(self.detector.last_result)
 
+    def disconnected(self):
+        self.stop()
+        self.recent_current.clear()
+
     def _render(self,result):
         self.status_var.set(result.state.value)
         self.note_var.set(result.note)
@@ -176,9 +180,11 @@ class GripPanel(ttk.Frame):
         current=float(fields['current_ma'])/1000.0
         history=self.recent_current.setdefault(servo_id,deque(maxlen=30))
         history.append(current)
-        if (self.detector.armed and servo_id != self.watch_id) or (
-            not self.detector.armed and servo_id != self.app.servo_id()
-        ):
+        try:
+            selected_id = self.watch_id if self.detector.armed else self.app.servo_id()
+        except (ValueError, tk.TclError):
+            return None
+        if servo_id != selected_id:
             return None
         sample=GripSample(time.monotonic(),float(fields['angle_deg']),current,int(fields['status']))
         result=self.detector.observe(sample)
