@@ -1,20 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-HA8-U35H-M Independent Upper Computer V1
-========================================
+HA8-U35H-M direct USB serial test console.
 
-Architecture:
-    HA8_UpperComputer.py  -> GUI / application
-    usb_can_cdc.py        -> direct USB-CAN CDC transport
-    ha8_protocol.py       -> ALL HA8 control & response protocol
+Path:
+    Windows PC -> Official servo USB serial adapter/expansion board
+               -> HA8-U35H-M (12V servo supply as rated)
 
-Hardware path:
-    PC -> USB-CAN -> CAN 1 Mbps -> CTS100M -> UART 115200
-       -> servo expansion board -> HA8-U35H-M
+The transport writes complete HA8 frames directly; no CAN/CTS/F103.
+HA8 packet encoding and response parsing remain in ha8_protocol.py.
+"""
 
-CAN IDs:
-    0x6A0 command
-    0x6A1 feedback
 """
 
 from __future__ import annotations
@@ -46,19 +41,10 @@ from ha8_protocol import (
     CMD_RESET_USER_DATA,
     CMD_MONITOR,
 )
-from f103_uart_bridge import F103UartBridge
-from usb_can_cdc import (
-    UsbCanCdc,
-    CanFrame,
-    DEFAULT_TX_ID,
-    DEFAULT_RX_ID,
-    CAN_BITRATE_TEXT,
-    CDC_BAUD,
-    parse_standard_data_record,
-)
+from ha8_serial import HA8SerialTransport
 
 APP_TITLE = "HA8-U35H-M 全功能测试上位机"
-APP_VERSION = "2.1-beta"
+APP_VERSION = "3.0-beta"
 
 
 class HA8UpperComputer(tk.Tk):
@@ -70,11 +56,13 @@ class HA8UpperComputer(tk.Tk):
         self.minsize(1100, 730)
 
         self.protocol_parser = ResponseStreamParser()
-        self.transport = UsbCanCdc(
-            on_frame=self._on_can_frame_thread,
+        self.transport = HA8SerialTransport(
+            on_bytes=self._on_serial_bytes_thread,
             on_error=self._on_transport_error_thread,
-            on_raw=self._on_can_raw_thread,
+            on_raw=self._on_serial_raw_thread,
         )
+
+
 
         self.ui_queue: queue.Queue = queue.Queue()
         self.monitor_running = False
@@ -88,8 +76,6 @@ class HA8UpperComputer(tk.Tk):
         self.samples = []
         self.expert_mode = tk.BooleanVar(value=False)
 
-        self.tx_can_count = 0
-        self.rx_can_count = 0
         self.tx_ha8_count = 0
         self.rx_ha8_count = 0
 
@@ -122,7 +108,7 @@ class HA8UpperComputer(tk.Tk):
         ttk.Label(header, text=APP_TITLE, style="Title.TLabel").pack(side="left")
         ttk.Label(
             header,
-            text="USB-CAN / F103 UART → CAN 1Mbps → CTS100M → HA8   |   CMD 0x6A0 / FB 0x6A1",
+            text="官方 USB 串口转接板 → HA8 | 115200 8N1 | 原生 HA8 协议",
         ).pack(side="right")
 
         self._build_connection(root)
@@ -146,7 +132,7 @@ class HA8UpperComputer(tk.Tk):
         self.nb.add(self.tab_config, text="参数读写")
         self.nb.add(self.tab_advanced, text="同步 / 异步")
         self.nb.add(self.tab_raw, text="HA8 原始协议")
-        self.nb.add(self.tab_debug, text="CAN 调试")
+        self.nb.add(self.tab_debug, text="串口调试")
 
         self._build_control_tab()
         self._build_monitor_tab()
@@ -159,71 +145,44 @@ class HA8UpperComputer(tk.Tk):
         self._build_log(root)
 
     def _build_connection(self, parent):
-        box = ttk.LabelFrame(parent, text="通讯连接：USB-CAN 或 F103 桥接", padding=8)
+        box = ttk.LabelFrame(parent, text="官方舵机转接板 USB 串口直连", padding=8)
         box.pack(fill="x", pady=(8, 0))
-
-        ttk.Label(box, text="端口").grid(row=0, column=0, padx=4, pady=4)
+        ttk.Label(box, text="串口").grid(row=0, column=0, padx=4, pady=4)
         self.port_var = tk.StringVar()
-        self.port_combo = ttk.Combobox(box, textvariable=self.port_var, width=22, state="normal")
+        self.port_combo = ttk.Combobox(box, textvariable=self.port_var, width=18, state="normal")
         self.port_combo.grid(row=0, column=1, padx=4)
-
         ttk.Button(box, text="刷新", command=self.refresh_ports).grid(row=0, column=2, padx=4)
 
-        self.connect_btn = ttk.Button(box, text="连接", command=self.toggle_connection)
-        self.connect_btn.grid(row=0, column=3, padx=(14, 4))
+        ttk.Label(box, text="波特率").grid(row=0, column=3, padx=(14, 4))
+        self.serial_baud_var = tk.StringVar(value="115200")
+        self.serial_baud_combo = ttk.Combobox(
+            box, textvariable=self.serial_baud_var,
+            values=["9600", "57600", "115200", "230400"],
+            width=12, state="readonly",
+        )
+        self.serial_baud_combo.grid(row=0, column=4, padx=4)
 
+        self.connect_btn = ttk.Button(box, text="连接", command=self.toggle_connection)
+        self.connect_btn.grid(row=0, column=5, padx=8)
         self.conn_var = tk.StringVar(value="未连接")
         self.conn_label = ttk.Label(box, textvariable=self.conn_var, style="BAD.TLabel")
-        self.conn_label.grid(row=0, column=4, padx=8)
+        self.conn_label.grid(row=0, column=6, padx=8)
 
-        ttk.Separator(box, orient="vertical").grid(row=0, column=5, sticky="ns", padx=12)
-
-        ttk.Label(box, text="舵机 ID").grid(row=0, column=6, padx=4)
+        ttk.Label(box, text="舵机 ID").grid(row=0, column=7, padx=(14, 4))
         self.servo_id_var = tk.IntVar(value=0)
         ttk.Spinbox(box, from_=0, to=254, textvariable=self.servo_id_var, width=7).grid(
-            row=0, column=7, padx=4
+            row=0, column=8, padx=4
         )
-
-        ttk.Button(box, text="Ping", command=self.ping_servo).grid(row=0, column=8, padx=4)
-
+        ttk.Button(box, text="Ping", command=self.ping_servo).grid(row=0, column=9, padx=4)
         self.online_var = tk.StringVar(value="舵机：未知")
         self.online_label = ttk.Label(box, textvariable=self.online_var)
-        self.online_label.grid(row=0, column=9, padx=8)
+        self.online_label.grid(row=0, column=10, padx=8)
 
         ttk.Label(
-            box, text=f"CAN {CAN_BITRATE_TEXT}"
-        ).grid(row=0, column=10, padx=(20, 4))
-
-        ttk.Label(box, text="通讯模式").grid(row=1, column=0, padx=4, pady=5)
-        self.transport_mode_var = tk.StringVar(value="USB-CAN CDC")
-        self.transport_mode_combo = ttk.Combobox(
-            box, textvariable=self.transport_mode_var, width=24,
-            values=["USB-CAN CDC", "STM32F103 串口桥接"], state="readonly",
-        )
-        self.transport_mode_combo.grid(
-            row=1, column=1, columnspan=2, sticky="w", padx=4, pady=5
-        )
-        self.transport_mode_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda _event: self._refresh_transport_mode_ui()
-        )
-
-        ttk.Label(box, text="F103 串口波特率").grid(
-            row=1, column=3, padx=4, pady=5
-        )
-        self.f103_baud_var = tk.StringVar(value="115200")
-        self.f103_baud_combo = ttk.Combobox(
-            box, textvariable=self.f103_baud_var,
-            values=["9600", "57600", "115200", "230400"],
-            state="readonly", width=12,
-        )
-        self.f103_baud_combo.grid(row=1, column=4, padx=4, pady=5)
-        self.transport_hint_var = tk.StringVar()
-        ttk.Label(
-            box, textvariable=self.transport_hint_var,
-            foreground="#555555", wraplength=540
-        ).grid(row=1, column=5, columnspan=6, sticky="w", padx=10)
-        self._refresh_transport_mode_ui()
+            box,
+            text="UART 8N1 · 发送完整 HA8 指令，不经过 CAN/STM32",
+            foreground="#555555",
+        ).grid(row=1, column=0, columnspan=11, sticky="w", padx=6, pady=(5, 0))
 
     def _build_control_tab(self):
         left = ttk.LabelFrame(self.tab_control, text="目标运动", padding=12)
@@ -459,30 +418,29 @@ class HA8UpperComputer(tk.Tk):
         ttk.Button(g,text="发送完整 HA8 指令",command=self.send_raw_ha8).grid(row=1,column=3,sticky="w",pady=12)
         self.raw_preview_var=tk.StringVar(value="—")
         ttk.Label(g,textvariable=self.raw_preview_var,wraplength=1080).grid(row=2,column=0,columnspan=5,sticky="w",pady=8)
-        ttk.Label(g,text="注意：本页发送前会自动添加 12 4C 帧头、LEN 和校验和，再按 8 字节拆成 CAN 0x6A0。",foreground="#a31717").grid(row=3,column=0,columnspan=5,sticky="w",pady=6)
+        ttk.Label(g,text="按 HA8 原生协议自动添加 12 4C、LEN 和校验和；通过官方 USB 串口一次发送完整指令。",foreground="#a31717").grid(row=3,column=0,columnspan=5,sticky="w",pady=6)
         tests=ttk.LabelFrame(self.tab_raw,text="常用原始例子",padding=14)
         tests.pack(fill="x",pady=10)
         for label,cmd,body in [("Ping","01","00"),("单圈读取","0A","00"),("多圈读取","10","00"),("监控","16","00")]:
             ttk.Button(tests,text=label,command=lambda c=cmd,b=body:self.load_raw_example(c,b)).pack(side="left",padx=7)
 
     def _build_debug_tab(self):
-        tx = ttk.LabelFrame(self.tab_debug, text="手动发送标准 CAN 数据帧（调试用）", padding=10)
+        tx = ttk.LabelFrame(self.tab_debug, text="手动发送串口原始字节（仅用于协议调试）", padding=10)
         tx.pack(fill="x")
-
-        ttk.Label(tx, text="ID (hex)").grid(row=0, column=0, padx=4)
-        self.raw_can_id_var = tk.StringVar(value="6A0")
-        ttk.Entry(tx, textvariable=self.raw_can_id_var, width=10).grid(row=0, column=1, padx=4)
-
-        ttk.Label(tx, text="DATA (最多8字节)").grid(row=0, column=2, padx=(16, 4))
-        self.raw_can_data_var = tk.StringVar(value="12 4C 01 01 00 60")
-        ttk.Entry(tx, textvariable=self.raw_can_data_var, width=45).grid(row=0, column=3, padx=4)
-
-        ttk.Button(tx, text="发送 CAN", command=self.send_raw_can).grid(row=0, column=4, padx=8)
-        dbg = ttk.LabelFrame(self.tab_debug, text="CAN 收发", padding=8)
+        ttk.Label(tx, text="HEX 字节").grid(row=0, column=0, padx=4)
+        self.raw_serial_var = tk.StringVar(value="12 4C 01 01 00 60")
+        ttk.Entry(tx, textvariable=self.raw_serial_var, width=78).grid(row=0, column=1, padx=6)
+        ttk.Button(tx, text="发送原始字节", command=self.send_raw_serial).grid(
+            row=0, column=2, padx=8)
+        ttk.Label(
+            tx,
+            text="注意：此项不会自动计算校验和。如需构造正确命令，建议使用“HA8 原始协议”页。",
+            foreground="#a31717",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=8)
+        dbg = ttk.LabelFrame(self.tab_debug, text="实际串口收发字节（TX / RX）", padding=8)
         dbg.pack(fill="both", expand=True, pady=(10, 0))
-
-        self.can_text = tk.Text(dbg, height=18, wrap="none", font=("Consolas", 10))
-        self.can_text.pack(fill="both", expand=True)
+        self.serial_text = tk.Text(dbg, height=18, wrap="none", font=("Consolas", 10))
+        self.serial_text.pack(fill="both", expand=True)
 
     def _build_log(self, parent):
         box = ttk.LabelFrame(parent, text="运行日志", padding=6)
@@ -498,7 +456,7 @@ class HA8UpperComputer(tk.Tk):
         foot = ttk.Frame(parent)
         foot.pack(fill="x", pady=(6, 0))
 
-        self.counter_var = tk.StringVar(value="CAN TX 0 | CAN RX 0 | HA8 TX 0 | HA8 RX 0")
+        self.counter_var = tk.StringVar(value="HA8 TX 0 | HA8 RX 0")
         ttk.Label(foot, textvariable=self.counter_var).pack(side="left")
 
         ttk.Button(foot, text="清空日志", command=self.clear_logs).pack(side="right")
@@ -506,32 +464,16 @@ class HA8UpperComputer(tk.Tk):
 
     # ---------- connection ----------
     def refresh_ports(self):
-        ports = list(list_ports.comports())
-        values = [p.device for p in ports]
+        values = [p.device for p in list_ports.comports()]
         self.port_combo["values"] = values
-
-        current = self.port_var.get().strip()
-        if current in values:
+        if self.port_var.get().strip() in values:
             return
-        if "COM11" in values:
-            self.port_var.set("COM11")
+        # On the test bench the official adapter was previously COM6.
+        # This is only a preference; the OS may assign any COM port.
+        if "COM6" in values:
+            self.port_var.set("COM6")
         elif values:
             self.port_var.set(values[0])
-
-    def _is_f103_mode(self):
-        return self.transport_mode_var.get() == "STM32F103 串口桥接"
-
-    def _refresh_transport_mode_ui(self):
-        if self._is_f103_mode():
-            self.f103_baud_combo.configure(state="readonly")
-            self.transport_hint_var.set(
-                "USB-TTL → F103：串口写入原始 HA8 帧；固件固定 CAN 0x6A0/0x6A1。"
-            )
-        else:
-            self.f103_baud_combo.configure(state="disabled")
-            self.transport_hint_var.set(
-                "USB-CAN CDC：驱动自动发送 20 字节 CAN 封包和初始化命令。"
-            )
 
     def toggle_connection(self):
         if self.transport.is_open:
@@ -542,50 +484,21 @@ class HA8UpperComputer(tk.Tk):
     def connect(self):
         port = self.port_var.get().strip()
         if not port:
-            messagebox.showwarning("未选择端口", "请选择当前通讯设备对应的 COM 端口")
+            messagebox.showwarning("未选择端口", "请选择官方舵机 USB 串口转接板对应的 COM 端口")
             return
-
         try:
-            mode = self.transport_mode_var.get()
-            self.log(f"连接 {port}，模式：{mode}")
-            self.transport.close()
-            if self._is_f103_mode():
-                self.transport = F103UartBridge(
-                    on_frame=self._on_can_frame_thread,
-                    on_error=self._on_transport_error_thread,
-                    on_raw=self._on_can_raw_thread,
-                )
-                self.transport.open(
-                    port, baudrate=int(self.f103_baud_var.get())
-                )
-                self.log(
-                    "F103 桥接已连接：串口发送 HA8 原始字节，"
-                    "MCU 固定 CAN TX=0x6A0 / RX=0x6A1。"
-                )
-            else:
-                self.transport = UsbCanCdc(
-                    on_frame=self._on_can_frame_thread,
-                    on_error=self._on_transport_error_thread,
-                    on_raw=self._on_can_raw_thread,
-                )
-                self.transport.open(port)
-                self.log(f"USB-CAN CDC 已初始化：{CDC_BAUD} 8N1")
+            baud = int(self.serial_baud_var.get())
+            self.transport.open(port, baudrate=baud)
             self.protocol_parser.reset()
-            self.conn_var.set(f"已连接 {port} ({mode})")
+            self.conn_var.set(f"已连接 {port} · {baud} 8N1")
             self.conn_label.configure(style="OK.TLabel")
             self.connect_btn.configure(text="断开")
-            self.transport_mode_combo.configure(state="disabled")
-            self.f103_baud_combo.configure(state="disabled")
-            self.log(
-                f"CAN={CAN_BITRATE_TEXT}, CMD=0x{DEFAULT_TX_ID:03X}, "
-                f"FB=0x{DEFAULT_RX_ID:03X}"
-            )
+            self.serial_baud_combo.configure(state="disabled")
+            self.log(f"官方 USB 串口已连接：{port}, {baud} 8N1，原生 HA8 帧，不经过 CAN")
         except Exception as exc:
             self.transport.close()
             self.conn_var.set("连接失败")
             self.conn_label.configure(style="BAD.TLabel")
-            self.transport_mode_combo.configure(state="readonly")
-            self._refresh_transport_mode_ui()
             messagebox.showerror("连接失败", str(exc))
             self.log(f"ERROR 连接失败：{exc}")
 
@@ -593,14 +506,14 @@ class HA8UpperComputer(tk.Tk):
         self.stop_scan()
         self.stop_monitor()
         self.transport.close()
+        self.protocol_parser.reset()
         self.conn_var.set("未连接")
         self.conn_label.configure(style="BAD.TLabel")
         self.connect_btn.configure(text="连接")
-        self.transport_mode_combo.configure(state="readonly")
-        self._refresh_transport_mode_ui()
+        self.serial_baud_combo.configure(state="readonly")
         self.online_var.set("舵机：未知")
         self.online_label.configure(style="")
-        self.log("通讯设备已断开")
+        self.log("官方 USB 串口已断开")
 
     # ---------- helpers ----------
     def servo_id(self) -> int:
@@ -623,9 +536,8 @@ class HA8UpperComputer(tk.Tk):
 
     def send_ha8(self, frame: bytes, label: str):
         self.ensure_connected()
-        self.transport.send_ha8(frame, DEFAULT_TX_ID)
+        self.transport.send_ha8(frame)
         self.tx_ha8_count += 1
-        self.tx_can_count += (len(frame) + 7) // 8
         self.log(f"HA8 TX [{label}] {hex_bytes(frame)}")
         self._update_counter()
 
@@ -860,7 +772,7 @@ class HA8UpperComputer(tk.Tk):
     def preview_guided_sync(self):
         try:
             packet=self._guided_sync_frame()
-            self.sync_guided_preview.set(f"HA8 ({len(packet)}字节)：{hex_bytes(packet)}；CAN帧数={(len(packet)+7)//8}")
+            self.sync_guided_preview.set(f"HA8 ({len(packet)}字节)：{hex_bytes(packet)}；UART单次发送")
         except Exception as exc:
             self.sync_guided_preview.set(f"参数错误：{exc}")
 
@@ -890,7 +802,7 @@ class HA8UpperComputer(tk.Tk):
     def preview_sync(self):
         try:
             v=self._sync_bytes()
-            self.sync_preview.set(f"完整 HA8 ({len(v)} bytes): {hex_bytes(v)}  |  CAN帧数 {(len(v)+7)//8}")
+            self.sync_preview.set(f"完整 HA8 ({len(v)} bytes): {hex_bytes(v)}  | UART单次发送")
         except Exception as exc:
             self.sync_preview.set(str(exc))
 
@@ -898,7 +810,7 @@ class HA8UpperComputer(tk.Tk):
         def act():
             self._expert_allowed()
             b=self._sync_bytes()
-            if not messagebox.askyesno("发送同步指令",f"0x19 同步指令，{len(b)} 字节（{(len(b)+7)//8} CAN帧）；此载荷未经本机固件验证。确定发送？"):
+            if not messagebox.askyesno("发送同步指令",f"0x19 同步指令，{len(b)} 字节（UART直接发送）；此载荷未经本机固件验证。确定发送？"):
                 return
             self.send_ha8(b,"同步指令 0x19 / 原始载荷")
         self.safe_action(act)
@@ -916,7 +828,7 @@ class HA8UpperComputer(tk.Tk):
     def preview_raw(self):
         try:
             f=self._raw_frame()
-            self.raw_preview_var.set(f"请求 {hex_bytes(f)}  | 共 {len(f)} 字节 / {(len(f)+7)//8} 帧标准 CAN")
+            self.raw_preview_var.set(f"请求 {hex_bytes(f)}  | 共 {len(f)} 字节 / UART直接发送")
         except Exception as exc:
             self.raw_preview_var.set(f"构造失败：{exc}")
 
@@ -929,31 +841,27 @@ class HA8UpperComputer(tk.Tk):
             self.send_ha8(f,"HA8 原始封包")
         self.safe_action(act)
 
-    def send_raw_can(self):
+    def send_raw_serial(self):
         def act():
-            can_id = int(self.raw_can_id_var.get().strip().lower().replace("0x", ""), 16)
-            data = parse_hex_string(self.raw_can_data_var.get())
-            if len(data) > 8:
-                raise ValueError("手动 CAN 单帧最多 8 字节")
-            self.transport.send_can(can_id, data)
-            self.tx_can_count += 1
-            if self._is_f103_mode():
-                self.log(
-                    "F103 的 UART 不携带 CAN ID/DLC；手动 CAN 仅固定 0x6A0，"
-                    "实际分帧由 F103 固件决定。"
-                )
-            self._update_counter()
+            data = parse_hex_string(self.raw_serial_var.get())
+            if not data:
+                raise ValueError("HEX 不能为空")
+            if not messagebox.askyesno(
+                "发送原始串口数据",
+                f"未封装/未检查的原始字节可能触发舵机动作。\\n"
+                f"即将发送 {len(data)} 字节：\\n{hex_bytes(data)}\\n\\n确认？"
+            ):
+                return
+            self.transport.send_raw(data)
+            self.log(f"UART TX RAW {hex_bytes(data)}")
         self.safe_action(act)
 
     # ---------- RX ----------
-    def _on_can_raw_thread(self, direction: str, packet: bytes):
-        if direction == "TX" and len(packet) == 20:
-            self.ui_queue.put(("can_tx_record", packet))
-        elif direction in ("TX_UART", "RX_UART"):
-            self.ui_queue.put(("uart_stream", (direction, bytes(packet))))
+    def _on_serial_raw_thread(self, direction: str, packet: bytes):
+        self.ui_queue.put(("serial_stream", (direction, bytes(packet))))
 
-    def _on_can_frame_thread(self, frame: CanFrame):
-        self.ui_queue.put(("can_frame", frame))
+    def _on_serial_bytes_thread(self, data: bytes):
+        self.ui_queue.put(("serial_data", bytes(data)))
 
     def _on_transport_error_thread(self, exc: Exception):
         self.ui_queue.put(("transport_error", exc))
@@ -962,57 +870,31 @@ class HA8UpperComputer(tk.Tk):
         try:
             while True:
                 kind, value = self.ui_queue.get_nowait()
-
-                if kind == "can_frame":
-                    self._handle_can_frame(value)
-                elif kind == "can_tx_record":
-                    try:
-                        f=parse_standard_data_record(value)
-                        self._append_can_text(f"TX  ID=0x{f.can_id:03X} DLC={f.dlc} DATA={hex_bytes(f.data)}")
-                    except Exception:
-                        self._append_can_text(f"TX USB RAW {hex_bytes(value)}")
-
-                elif kind == "uart_stream":
+                if kind == "serial_data":
+                    self._handle_serial_data(value)
+                elif kind == "serial_stream":
                     direction, data = value
-                    self._append_can_text(
-                        f"F103 {direction} {hex_bytes(data)} "
-                        "(原始 UART 字节流；非实际 CAN 帧边界)"
-                    )
-
+                    self._append_serial_text(f"{direction}  {hex_bytes(data)}")
                 elif kind == "transport_error":
-                    self.log(f"通讯接收错误：{value}")
-                    messagebox.showerror("通讯错误", str(value))
+                    self.log(f"串口接收错误：{value}")
+                    messagebox.showerror("串口错误", str(value))
                     self.disconnect()
-
                 elif kind == "error":
                     self.log(f"ERROR: {value}")
                     messagebox.showerror("操作失败", str(value))
-
         except queue.Empty:
             pass
         self.after(20, self._pump_ui_queue)
 
-    def _handle_can_frame(self, frame: CanFrame):
-        self.rx_can_count += 1
-        prefix = "RX (F103 串口流推定)" if self._is_f103_mode() else "RX"
-        self._append_can_text(
-            f"{prefix} ID=0x{frame.can_id:03X} DLC={frame.dlc} DATA={hex_bytes(frame.data)}"
-        )
-        self._update_counter()
-
-        if frame.can_id != DEFAULT_RX_ID:
-            return
-
-        packets = self.protocol_parser.feed(frame.data)
+    def _handle_serial_data(self, data: bytes):
+        packets = self.protocol_parser.feed(data)
         for raw in packets:
             self.rx_ha8_count += 1
             self._update_counter()
-
             try:
                 rsp = decode_response(raw)
                 self.log(
-                    f"HA8 RX [{rsp.cmd_name}] ID={rsp.servo_id} "
-                    f"{hex_bytes(raw)}"
+                    f"HA8 RX [{rsp.cmd_name}] ID={rsp.servo_id} {hex_bytes(raw)}"
                 )
                 self._apply_response(rsp)
             except Exception as exc:
@@ -1090,20 +972,19 @@ class HA8UpperComputer(tk.Tk):
         self.log_text.insert("end", f"[{stamp}] {text}\n")
         self.log_text.see("end")
 
-    def _append_can_text(self, text: str):
+    def _append_serial_text(self, text: str):
         stamp = time.strftime("%H:%M:%S")
-        self.can_text.insert("end", f"[{stamp}] {text}\n")
-        self.can_text.see("end")
+        self.serial_text.insert("end", f"[{stamp}] {text}\n")
+        self.serial_text.see("end")
 
     def _update_counter(self):
         self.counter_var.set(
-            f"CAN TX {self.tx_can_count} | CAN RX {self.rx_can_count} | "
             f"HA8 TX {self.tx_ha8_count} | HA8 RX {self.rx_ha8_count}"
         )
 
     def clear_logs(self):
         self.log_text.delete("1.0", "end")
-        self.can_text.delete("1.0", "end")
+        self.serial_text.delete("1.0", "end")
 
     def save_log(self):
         path = filedialog.asksaveasfilename(
@@ -1116,8 +997,8 @@ class HA8UpperComputer(tk.Tk):
         with open(path, "w", encoding="utf-8") as f:
             f.write("=== HA8 Upper Computer Log ===\n")
             f.write(self.log_text.get("1.0", "end"))
-            f.write("\n=== CAN Debug ===\n")
-            f.write(self.can_text.get("1.0", "end"))
+            f.write("\n=== Serial Debug ===\n")
+            f.write(self.serial_text.get("1.0", "end"))
 
     def on_close(self):
         try:
