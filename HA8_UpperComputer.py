@@ -46,6 +46,7 @@ from ha8_protocol import (
     CMD_RESET_USER_DATA,
     CMD_MONITOR,
 )
+from f103_uart_bridge import F103UartBridge
 from usb_can_cdc import (
     UsbCanCdc,
     CanFrame,
@@ -57,7 +58,7 @@ from usb_can_cdc import (
 )
 
 APP_TITLE = "HA8-U35H-M 全功能测试上位机"
-APP_VERSION = "2.0-beta"
+APP_VERSION = "2.1-beta"
 
 
 class HA8UpperComputer(tk.Tk):
@@ -121,7 +122,7 @@ class HA8UpperComputer(tk.Tk):
         ttk.Label(header, text=APP_TITLE, style="Title.TLabel").pack(side="left")
         ttk.Label(
             header,
-            text="USB-CAN → CAN 1Mbps → CTS100M → HA8   |   CMD 0x6A0 / FB 0x6A1",
+            text="USB-CAN / F103 UART → CAN 1Mbps → CTS100M → HA8   |   CMD 0x6A0 / FB 0x6A1",
         ).pack(side="right")
 
         self._build_connection(root)
@@ -158,7 +159,7 @@ class HA8UpperComputer(tk.Tk):
         self._build_log(root)
 
     def _build_connection(self, parent):
-        box = ttk.LabelFrame(parent, text="USB-CAN 连接", padding=8)
+        box = ttk.LabelFrame(parent, text="通讯连接：USB-CAN 或 F103 桥接", padding=8)
         box.pack(fill="x", pady=(8, 0))
 
         ttk.Label(box, text="端口").grid(row=0, column=0, padx=4, pady=4)
@@ -168,7 +169,7 @@ class HA8UpperComputer(tk.Tk):
 
         ttk.Button(box, text="刷新", command=self.refresh_ports).grid(row=0, column=2, padx=4)
 
-        self.connect_btn = ttk.Button(box, text="连接 USB-CAN", command=self.toggle_connection)
+        self.connect_btn = ttk.Button(box, text="连接", command=self.toggle_connection)
         self.connect_btn.grid(row=0, column=3, padx=(14, 4))
 
         self.conn_var = tk.StringVar(value="未连接")
@@ -190,9 +191,39 @@ class HA8UpperComputer(tk.Tk):
         self.online_label.grid(row=0, column=9, padx=8)
 
         ttk.Label(
-            box,
-            text=f"CDC {CDC_BAUD} 8N1 | CAN {CAN_BITRATE_TEXT}",
+            box, text=f"CAN {CAN_BITRATE_TEXT}"
         ).grid(row=0, column=10, padx=(20, 4))
+
+        ttk.Label(box, text="通讯模式").grid(row=1, column=0, padx=4, pady=5)
+        self.transport_mode_var = tk.StringVar(value="USB-CAN CDC")
+        self.transport_mode_combo = ttk.Combobox(
+            box, textvariable=self.transport_mode_var, width=24,
+            values=["USB-CAN CDC", "STM32F103 串口桥接"], state="readonly",
+        )
+        self.transport_mode_combo.grid(
+            row=1, column=1, columnspan=2, sticky="w", padx=4, pady=5
+        )
+        self.transport_mode_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._refresh_transport_mode_ui()
+        )
+
+        ttk.Label(box, text="F103 串口波特率").grid(
+            row=1, column=3, padx=4, pady=5
+        )
+        self.f103_baud_var = tk.StringVar(value="115200")
+        self.f103_baud_combo = ttk.Combobox(
+            box, textvariable=self.f103_baud_var,
+            values=["9600", "57600", "115200", "230400"],
+            state="readonly", width=12,
+        )
+        self.f103_baud_combo.grid(row=1, column=4, padx=4, pady=5)
+        self.transport_hint_var = tk.StringVar()
+        ttk.Label(
+            box, textvariable=self.transport_hint_var,
+            foreground="#555555", wraplength=540
+        ).grid(row=1, column=5, columnspan=6, sticky="w", padx=10)
+        self._refresh_transport_mode_ui()
 
     def _build_control_tab(self):
         left = ttk.LabelFrame(self.tab_control, text="目标运动", padding=12)
@@ -487,6 +518,21 @@ class HA8UpperComputer(tk.Tk):
         elif values:
             self.port_var.set(values[0])
 
+    def _is_f103_mode(self):
+        return self.transport_mode_var.get() == "STM32F103 串口桥接"
+
+    def _refresh_transport_mode_ui(self):
+        if self._is_f103_mode():
+            self.f103_baud_combo.configure(state="readonly")
+            self.transport_hint_var.set(
+                "USB-TTL → F103：串口写入原始 HA8 帧；固件固定 CAN 0x6A0/0x6A1。"
+            )
+        else:
+            self.f103_baud_combo.configure(state="disabled")
+            self.transport_hint_var.set(
+                "USB-CAN CDC：驱动自动发送 20 字节 CAN 封包和初始化命令。"
+            )
+
     def toggle_connection(self):
         if self.transport.is_open:
             self.disconnect()
@@ -500,20 +546,46 @@ class HA8UpperComputer(tk.Tk):
             return
 
         try:
-            self.log(f"连接 {port}，初始化 USB-CAN...")
-            self.transport.open(port)
+            mode = self.transport_mode_var.get()
+            self.log(f"连接 {port}，模式：{mode}")
+            self.transport.close()
+            if self._is_f103_mode():
+                self.transport = F103UartBridge(
+                    on_frame=self._on_can_frame_thread,
+                    on_error=self._on_transport_error_thread,
+                    on_raw=self._on_can_raw_thread,
+                )
+                self.transport.open(
+                    port, baudrate=int(self.f103_baud_var.get())
+                )
+                self.log(
+                    "F103 桥接已连接：串口发送 HA8 原始字节，"
+                    "MCU 固定 CAN TX=0x6A0 / RX=0x6A1。"
+                )
+            else:
+                self.transport = UsbCanCdc(
+                    on_frame=self._on_can_frame_thread,
+                    on_error=self._on_transport_error_thread,
+                    on_raw=self._on_can_raw_thread,
+                )
+                self.transport.open(port)
+                self.log(f"USB-CAN CDC 已初始化：{CDC_BAUD} 8N1")
             self.protocol_parser.reset()
-            self.conn_var.set(f"已连接 {port}")
+            self.conn_var.set(f"已连接 {port} ({mode})")
             self.conn_label.configure(style="OK.TLabel")
             self.connect_btn.configure(text="断开")
+            self.transport_mode_combo.configure(state="disabled")
+            self.f103_baud_combo.configure(state="disabled")
             self.log(
-                f"USB-CAN 初始化完成：CDC={CDC_BAUD}, CAN={CAN_BITRATE_TEXT}, "
-                f"CMD=0x{DEFAULT_TX_ID:03X}, FB=0x{DEFAULT_RX_ID:03X}"
+                f"CAN={CAN_BITRATE_TEXT}, CMD=0x{DEFAULT_TX_ID:03X}, "
+                f"FB=0x{DEFAULT_RX_ID:03X}"
             )
         except Exception as exc:
             self.transport.close()
             self.conn_var.set("连接失败")
             self.conn_label.configure(style="BAD.TLabel")
+            self.transport_mode_combo.configure(state="readonly")
+            self._refresh_transport_mode_ui()
             messagebox.showerror("连接失败", str(exc))
             self.log(f"ERROR 连接失败：{exc}")
 
@@ -523,7 +595,9 @@ class HA8UpperComputer(tk.Tk):
         self.transport.close()
         self.conn_var.set("未连接")
         self.conn_label.configure(style="BAD.TLabel")
-        self.connect_btn.configure(text="连接 USB-CAN")
+        self.connect_btn.configure(text="连接")
+        self.transport_mode_combo.configure(state="readonly")
+        self._refresh_transport_mode_ui()
         self.online_var.set("舵机：未知")
         self.online_label.configure(style="")
         self.log("USB-CAN 已断开")
@@ -537,7 +611,7 @@ class HA8UpperComputer(tk.Tk):
 
     def ensure_connected(self):
         if not self.transport.is_open:
-            raise RuntimeError("请先连接 USB-CAN")
+            raise RuntimeError("请先连接通讯设备")
 
     def safe_action(self, fn):
         try:
@@ -863,13 +937,20 @@ class HA8UpperComputer(tk.Tk):
                 raise ValueError("手动 CAN 单帧最多 8 字节")
             self.transport.send_can(can_id, data)
             self.tx_can_count += 1
+            if self._is_f103_mode():
+                self.log(
+                    "F103 的 UART 不携带 CAN ID/DLC；手动 CAN 仅固定 0x6A0，"
+                    "实际分帧由 F103 固件决定。"
+                )
             self._update_counter()
         self.safe_action(act)
 
     # ---------- RX ----------
     def _on_can_raw_thread(self, direction: str, packet: bytes):
-        if direction=="TX" and len(packet)==20:
-            self.ui_queue.put(("can_tx_record",packet))
+        if direction == "TX" and len(packet) == 20:
+            self.ui_queue.put(("can_tx_record", packet))
+        elif direction in ("TX_UART", "RX_UART"):
+            self.ui_queue.put(("uart_stream", (direction, bytes(packet))))
 
     def _on_can_frame_thread(self, frame: CanFrame):
         self.ui_queue.put(("can_frame", frame))
@@ -891,12 +972,20 @@ class HA8UpperComputer(tk.Tk):
                     except Exception:
                         self._append_can_text(f"TX USB RAW {hex_bytes(value)}")
 
+                elif kind == "uart_stream":
+                    direction, data = value
+                    self._append_can_text(
+                        f"F103 {direction} {hex_bytes(data)} "
+                        "(原始 UART 字节流；非实际 CAN 帧边界)"
+                    )
+
                 elif kind == "transport_error":
-                    self.log(f"USB-CAN 接收错误：{value}")
-                    messagebox.showerror("USB-CAN 错误", str(value))
+                    self.log(f"通讯接收错误：{value}")
+                    messagebox.showerror("通讯错误", str(value))
                     self.disconnect()
 
-                elif kind == "error":                    self.log(f"ERROR: {value}")
+                elif kind == "error":
+                    self.log(f"ERROR: {value}")
                     messagebox.showerror("操作失败", str(value))
 
         except queue.Empty:
@@ -905,8 +994,9 @@ class HA8UpperComputer(tk.Tk):
 
     def _handle_can_frame(self, frame: CanFrame):
         self.rx_can_count += 1
+        prefix = "RX (F103 串口流推定)" if self._is_f103_mode() else "RX"
         self._append_can_text(
-            f"RX  ID=0x{frame.can_id:03X} DLC={frame.dlc} DATA={hex_bytes(frame.data)}"
+            f"{prefix} ID=0x{frame.can_id:03X} DLC={frame.dlc} DATA={hex_bytes(frame.data)}"
         )
         self._update_counter()
 
