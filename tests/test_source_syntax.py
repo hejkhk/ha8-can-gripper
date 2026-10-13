@@ -12,6 +12,7 @@ class SourceSyntaxTests(unittest.TestCase):
         modules = [
             "HA8_UpperComputer.py",
             "ha8_protocol.py",
+            "ha8_serial.py",
             "usb_can_cdc.py",
             "f103_uart_bridge.py",
         ]
