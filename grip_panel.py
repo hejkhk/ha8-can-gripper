@@ -148,7 +148,7 @@ class GripPanel(ttk.Frame):
         if not self.apply():
             return
         self.watch_id=self.app.servo_id()
-        self.detector.arm()
+        self.detector.arm(time.monotonic())
         self.last_logged_state=GripState.CLOSING
         self._render(self.detector.last_result)
         self.app.log(f'夹持实验检测开始：舵机ID={self.watch_id}，请用原有位置控制发出闭合运动')
@@ -197,3 +197,12 @@ class GripPanel(ttk.Frame):
             if r.state==GripState.STALE and r.state!=self.last_logged_state:
                 self._render(r)
         self._watchdog_job=self.after(250,self._watchdog)
+
+    def destroy(self):
+        if self._watchdog_job is not None:
+            try:
+                self.after_cancel(self._watchdog_job)
+            except tk.TclError:
+                pass
+            self._watchdog_job = None
+        super().destroy()
