@@ -542,7 +542,7 @@ class HA8UpperComputer(tk.Tk):
     def connect(self):
         port = self.port_var.get().strip()
         if not port:
-            messagebox.showwarning("未选择端口", "请选择 USB-CAN 对应的 COM 端口")
+            messagebox.showwarning("未选择端口", "请选择当前通讯设备对应的 COM 端口")
             return
 
         try:
@@ -600,7 +600,7 @@ class HA8UpperComputer(tk.Tk):
         self._refresh_transport_mode_ui()
         self.online_var.set("舵机：未知")
         self.online_label.configure(style="")
-        self.log("USB-CAN 已断开")
+        self.log("通讯设备已断开")
 
     # ---------- helpers ----------
     def servo_id(self) -> int:
