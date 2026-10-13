@@ -17,6 +17,19 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(verify_response(rx))
         self.assertTrue(decode_response(rx).fields['online'])
 
+    def test_monitor_response_parse(self):
+        # Regression: the monitor branch must stay syntactically valid and decode.
+        content = struct.pack("<BHHHHBih", 0, 12000, 650, 3000, 2000, 0, 1234, 1)
+        response = bytes([0x05, 0x1C, 0x16, len(content)]) + content
+        response += bytes([sum(response) & 0xFF])
+        decoded = decode_response(response)
+        self.assertEqual(decoded.servo_id, 0)
+        self.assertEqual(decoded.fields["voltage_mv"], 12000)
+        self.assertEqual(decoded.fields["current_ma"], 650)
+        self.assertEqual(decoded.fields["power_mw"], 3000)
+        self.assertAlmostEqual(decoded.fields["angle_deg"], 123.4)
+        self.assertEqual(decoded.fields["turn"], 1)
+
     def test_multiframe_response_parser(self):
         rx = bytes.fromhex('05 1C 0A 03 00 FD FF 2A')
         p = ResponseStreamParser()
