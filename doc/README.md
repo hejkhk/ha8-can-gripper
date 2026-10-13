@@ -1,4 +1,6 @@
-# 文档索引
+# 文档索引（当前为官方 USB 串口直连）
+
+**当前接线优先查看：[direct_usb_serial_mode.md](direct_usb_serial_mode.md)**。现在不再经过 CAN/CTS100M/STM32。以下 CAN 文档保留用于历史集成参考，不作为当前 V3 调试配置。
 
 这个目录集中保存机械臂集成和夹爪控制相关资料：
 
