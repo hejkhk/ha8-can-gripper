@@ -3,6 +3,8 @@ import unittest
 from unittest.mock import Mock
 import sys
 import types
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 try:
     import serial
 except ImportError:
@@ -45,7 +47,6 @@ class F103BridgeTests(unittest.TestCase):
         received = []
         bridge = F103UartBridge(on_frame=received.append)
         bridge.ser = Mock(is_open=True)
-        bridge.ser.read.side_effect = [bytes.fromhex('05 1C'), bytes.fromhex('01 01 00 23')]
         bridge._running = True
         bridge.ser.read.side_effect = [bytes.fromhex('05 1C'), bytes.fromhex('01 01 00 23')]
         # Stop after second read without making thread/COM.
