@@ -518,7 +518,7 @@ class HA8UpperComputer(tk.Tk):
         self.serial_baud_combo.configure(state="readonly")
         self.online_var.set("舵机：未知")
         self.online_label.configure(style="")
-        self.grip_panel.stop()
+        self.grip_panel.disconnected()
         self.log("官方 USB 串口已断开")
 
     # ---------- helpers ----------
