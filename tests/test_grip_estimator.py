@@ -66,6 +66,9 @@ class GripTests(unittest.TestCase):
         d.observe(GripSample(0, 0, .1))
         out = d.observe(GripSample(.1, 4, .8, status_bits=4))
         self.assertEqual(out.state, GripState.FAULT)
+        # Fault remains latched even if fault bits drop for the next sample.
+        recovered = d.observe(GripSample(.2, 4, .5, status_bits=0))
+        self.assertEqual(recovered.state, GripState.FAULT)
 
     def test_beyond_angle_band_fails(self):
         d = self.make(valid_angle_min=0, valid_angle_max=5)
