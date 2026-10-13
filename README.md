@@ -55,9 +55,9 @@ python -m unittest discover -s tests -v
 ## V2.1-beta：USB-CAN 与 F103C8T6 双模式
 
 上位机在连接前可选择：
-- **USB-CAN CDC**：保留原来的 \`usb_can_cdc.py\`；20 字节 USB-CAN 封包；COM 115200 8N1。
-- **STM32F103 串口桥接**：新增 \`f103_uart_bridge.py\`；PC 串口以指定波特率直接发送 HA8 原始字节，由 F103 负责打包 CAN 0x6A0，CAN 0x6A1 反馈经 F103 转回 UART。
+- **USB-CAN CDC**：保留原来的 `usb_can_cdc.py`；20 字节 USB-CAN 封包；COM 115200 8N1。
+- **STM32F103 串口桥接**：新增 `f103_uart_bridge.py`；PC 串口以指定波特率直接发送 HA8 原始字节，由 F103 负责打包 CAN 0x6A0，CAN 0x6A1 反馈经 F103 转回 UART。
 
 注意：F103 透明桥接串口**不**接受 USB-CAN 的 20 字节命令；固定 CAN ID 由 MCU 固件决定，串口无法回传实际 CAN 帧边界。参见 [F103 桥接模式说明](doc/STM32F103_bridge_mode.md)。
 
-本版同时修复 V2.0-beta 中 \`IndentationError: unexpected indent\` 的启动错误。新增 F103 后端已做离线测试，尚待用户实机验收。
+本版同时修复 V2.0-beta 中 `IndentationError: unexpected indent` 的启动错误。新增 F103 后端已做离线测试，尚待用户实机验收。
