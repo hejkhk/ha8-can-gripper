@@ -447,7 +447,8 @@ def decode_response(frame: bytes) -> HA8Response:
         fields["angle_deg"] = angle_raw / 10.0
         fields["turn"] = turn
 
-    elif cmd == CMD_MONITOR and len(content) >= struct.calcsize("<BHHHHBih"):        sid, voltage, current, power, temp_raw, status, angle_raw, turn = struct.unpack(
+    elif cmd == CMD_MONITOR and len(content) >= struct.calcsize("<BHHHHBih"):
+        sid, voltage, current, power, temp_raw, status, angle_raw, turn = struct.unpack(
             "<BHHHHBih", content[:struct.calcsize("<BHHHHBih")]
         )
         fields.update({
