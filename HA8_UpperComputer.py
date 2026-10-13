@@ -10,8 +10,6 @@ The transport writes complete HA8 frames directly; no CAN/CTS/F103.
 HA8 packet encoding and response parsing remain in ha8_protocol.py.
 """
 
-"""
-
 from __future__ import annotations
 
 import csv
