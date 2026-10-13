@@ -158,6 +158,7 @@ class GripDetector:
         self._contact_start: float | None = None
         self._candidate_start: float | None = None
         self._had_contact = False
+        self._fault_latched = False
         self._max_progress = 0.0
         self.last_result = GripResult(GripState.IDLE, None, None, None, 0, '仅作实验参考，不作为自动抬升依据')
 
@@ -208,10 +209,12 @@ class GripDetector:
         # Bit 2 stall + bit 3..7 protection. Bit 0 indicates working, not fault.
         fault = bool(sample.status_bits & 0xFC) or filtered_current > self.settings.maximum_safe_current_a
         if fault:
+            self._fault_latched = True
+        if self._fault_latched:
             self.state = GripState.FAULT
             self._candidate_start = None
             self.last_result = GripResult(self.state, filtered_current, speed, torque,
-                                          self._max_progress, '堵转/保护位或过流；不能判定为夹稳')
+                                          self._max_progress, '曾发生堵转/保护位或过流；故障已锁存，重置前不得判定为夹稳')
             return self.last_result
         # Prevent idle, wrong closing direction, or limit against mechanical stop
         # from immediately becoming a 'grip' result.
