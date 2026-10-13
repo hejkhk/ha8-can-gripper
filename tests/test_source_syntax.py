@@ -13,6 +13,8 @@ class SourceSyntaxTests(unittest.TestCase):
             "HA8_UpperComputer.py",
             "ha8_protocol.py",
             "ha8_serial.py",
+            "grip_estimator.py",
+            "grip_panel.py",
             "usb_can_cdc.py",
             "f103_uart_bridge.py",
         ]
