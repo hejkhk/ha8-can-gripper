@@ -154,6 +154,8 @@ class GripDetector:
         self.state = GripState.IDLE
         self.samples: deque[GripSample] = deque(maxlen=max(3, self.settings.window_size))
         self.start_angle: float | None = None
+        self._armed_at: float | None = None
+        self._invalid_latched = False
         self.last_timestamp: float | None = None
         self._contact_start: float | None = None
         self._candidate_start: float | None = None
@@ -162,14 +164,16 @@ class GripDetector:
         self._max_progress = 0.0
         self.last_result = GripResult(GripState.IDLE, None, None, None, 0, '仅作实验参考，不作为自动抬升依据')
 
-    def arm(self) -> None:
+    def arm(self, now: float | None = None) -> None:
         self.reset()
         self.armed = True
+        self._armed_at = None if now is None else float(now)
         self.state = GripState.CLOSING
         self.last_result = GripResult(self.state, None, None, None, 0, '请开始闭合；同时开启周期监控')
 
     def check_stale(self, now: float) -> GripResult:
-        if self.armed and self.last_timestamp is not None and now - self.last_timestamp > self.settings.stale_seconds:
+        reference = self.last_timestamp if self.last_timestamp is not None else self._armed_at
+        if self.armed and reference is not None and now - reference > self.settings.stale_seconds:
             self.state = GripState.STALE
             self.last_result = GripResult(self.state, None, None, None,
                                           self._max_progress, '监控数据超过设定时限，请勿按夹稳处理')
@@ -178,17 +182,27 @@ class GripDetector:
     def observe(self, sample: GripSample) -> GripResult:
         if (not all(isfinite(x) for x in (sample.timestamp, sample.angle_deg, sample.current_a))
             or sample.current_a < 0 or not 0 <= sample.status_bits <= 255):
+            self._invalid_latched = True
             self.state = GripState.INVALID
             self.last_result = GripResult(self.state, None, None, None,
                                           self._max_progress, '监控回包数据不合法')
             return self.last_result
+        if self._invalid_latched:
+            return self.last_result  # explicit re-arm required after malformed monitoring
+        if self.state == GripState.STALE and self.armed:
+            return self.last_result  # require new observation session after communication gap
         if self.last_timestamp is not None and sample.timestamp <= self.last_timestamp:
             return self.last_result  # discard out-of-order data
         if self.last_timestamp is not None and sample.timestamp - self.last_timestamp > self.settings.stale_seconds:
             self.samples.clear()
             self._candidate_start = None
             self._contact_start = None
+            self._had_contact = False
             self.state = GripState.STALE if self.armed else GripState.IDLE
+            if self.armed:
+                self.last_result = GripResult(self.state, None, None, None,
+                                              self._max_progress, '监控发生超时，须手动重新启动夹持检测')
+                return self.last_result
         self.last_timestamp = sample.timestamp
         self.samples.append(sample)
         filtered_current = median(s.current_a for s in self.samples)
@@ -207,7 +221,7 @@ class GripDetector:
         progress = (sample.angle_deg - self.start_angle) * self.settings.closing_direction
         self._max_progress = max(self._max_progress, progress)
         # Bit 2 stall + bit 3..7 protection. Bit 0 indicates working, not fault.
-        fault = bool(sample.status_bits & 0xFC) or filtered_current > self.settings.maximum_safe_current_a
+        fault = bool(sample.status_bits & 0xFC) or sample.current_a > self.settings.maximum_safe_current_a
         if fault:
             self._fault_latched = True
         if self._fault_latched:
@@ -235,6 +249,8 @@ class GripDetector:
         else:
             self._contact_start = None
             self._candidate_start = None
+            # Once evidence of contact disappears, begin contact confirmation anew.
+            self._had_contact = False
         if not self._had_contact:
             self.state = GripState.CLOSING
             self.last_result = GripResult(self.state, filtered_current, speed, torque,
