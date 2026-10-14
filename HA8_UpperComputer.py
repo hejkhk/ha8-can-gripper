@@ -41,9 +41,10 @@ from ha8_protocol import (
 )
 from ha8_serial import HA8SerialTransport
 from grip_panel import GripPanel
+from auto_grip_panel import AutoGripPanel
 
 APP_TITLE = "HA8-U35H-M 全功能测试上位机"
-APP_VERSION = "3.1-beta"
+APP_VERSION = "3.2-beta"
 
 
 class HA8UpperComputer(tk.Tk):
@@ -118,6 +119,7 @@ class HA8UpperComputer(tk.Tk):
         self.tab_control = ttk.Frame(self.nb, padding=10)
         self.tab_monitor = ttk.Frame(self.nb, padding=10)
         self.tab_grip = ttk.Frame(self.nb, padding=10)
+        self.tab_auto_grip = ttk.Frame(self.nb, padding=10)
         self.tab_maint = ttk.Frame(self.nb, padding=10)
         self.tab_scan = ttk.Frame(self.nb, padding=10)
         self.tab_config = ttk.Frame(self.nb, padding=10)
@@ -128,6 +130,7 @@ class HA8UpperComputer(tk.Tk):
         self.nb.add(self.tab_control, text="位置控制")
         self.nb.add(self.tab_monitor, text="数据监控")
         self.nb.add(self.tab_grip, text="夹持检测（实验性）")
+        self.nb.add(self.tab_auto_grip, text="自动抓取测试")
         self.nb.add(self.tab_maint, text="停止 / 标定")
         self.nb.add(self.tab_scan, text="通讯检测")
         self.nb.add(self.tab_config, text="参数读写")
@@ -139,6 +142,8 @@ class HA8UpperComputer(tk.Tk):
         self._build_monitor_tab()
         self.grip_panel = GripPanel(self.tab_grip, self)
         self.grip_panel.pack(fill="both", expand=True)
+        self.auto_grip_panel = AutoGripPanel(self.tab_auto_grip, self)
+        self.auto_grip_panel.pack(fill="both", expand=True)
         self._build_maint_tab()
         self._build_scan_tab()
         self._build_config_tab()
@@ -519,6 +524,7 @@ class HA8UpperComputer(tk.Tk):
         self.online_var.set("舵机：未知")
         self.online_label.configure(style="")
         self.grip_panel.disconnected()
+        self.auto_grip_panel.disconnected()
         self.log("官方 USB 串口已断开")
 
     # ---------- helpers ----------
@@ -943,6 +949,7 @@ class HA8UpperComputer(tk.Tk):
 
         if "voltage_mv" in f:
             grip_result=self.grip_panel.on_monitor(rsp.servo_id,f)
+            self.auto_grip_panel.on_monitor(rsp.servo_id,f)
             self.samples.append((
                 time.time(),rsp.servo_id,f["voltage_mv"],f["current_ma"],f["power_mw"],
                 f["temperature_adc"],f["status"],f["angle_deg"],f["turn"],
