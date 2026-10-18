@@ -5,6 +5,7 @@ import unittest
 
 from auto_grip_panel import AutoGripPanel
 from ha8_protocol import HA8Protocol, STOP_HOLD
+from grip_estimator import GripDetector, GripSample, GripState
 
 
 class Value:
@@ -75,6 +76,12 @@ class AutoGripSafetyTests(unittest.TestCase):
         panel.on_monitor(3, {"angle_deg": 20.0, "current_ma": 100, "status": 0x02})
         self.assertTrue(panel.estop_latched)
         self.assertEqual(panel.app.sent[-1][0], HA8Protocol.stop(3, STOP_HOLD, 500))
+
+    def test_grip_detector_latches_command_error(self):
+        detector = GripDetector()
+        detector.arm()
+        result = detector.observe(GripSample(time.monotonic(), 10.0, 0.3, 0x02))
+        self.assertEqual(result.state, GripState.FAULT)
 
     def test_disconnection_during_motion_latches(self):
         panel = make_panel()
