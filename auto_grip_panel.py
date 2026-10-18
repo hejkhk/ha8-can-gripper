@@ -135,7 +135,9 @@ class AutoGripPanel(ttk.Frame):
         if not self.app.transport.is_open:
             raise RuntimeError('官方串口未连接')
         if not self.app.monitor_running:
-            raise RuntimeError('请先在“数据监控”页开启周期监控（建议100ms）')
+            raise RuntimeError('请在本页面点击“开启实时监控”（建议100ms）')
+        if getattr(self.app, 'scan_running', False):
+            raise RuntimeError('正在扫描舵机 ID，请先结束扫描再进行自动动作')
         sid=self.app.servo_id()
         if self.last_at is None or time.monotonic()-self.last_at>self.STALE_S or self.servo_id!=sid:
             raise RuntimeError('当前舵机角度/电流反馈已过期或ID不匹配，禁止盲动')
@@ -146,7 +148,7 @@ class AutoGripPanel(ttk.Frame):
     def _move(self,target,vel,power,sid):
         frame=HA8Protocol.move(servo_id=sid,angle_deg=target,multiturn=True,mode='velocity',
                               velocity_dps=vel,t_acc_ms=200,t_dec_ms=200,power_mw=power)
-        self.app.send_ha8(frame,'自动抓取测试：发送目标角度')
+        self.app.send_ha8(frame,'自动抓取测试：发送目标角度',owner='auto_grip')
 
     def grip(self):
         try:
@@ -220,7 +222,7 @@ class AutoGripPanel(ttk.Frame):
                 raise RuntimeError('串口已断开')
             sid = self.active_servo_id if self.active_servo_id is not None else self.app.servo_id()
             self.app.send_ha8(HA8Protocol.stop(sid, STOP_HOLD, power),
-                              f'自动抓取测试：保持停止（{reason}）')
+                              f'自动抓取测试：保持停止（{reason}）',owner='auto_grip')
             self.phase = 'stopping'
             self.detector = None
             self._stop_at = time.monotonic()
@@ -230,6 +232,19 @@ class AutoGripPanel(ttk.Frame):
             self.status_text.set(f'{reason}；已发送保持停止，正在观察角度是否稳定（非安全确认）')
         except Exception as ex:
             self._stop_unconfirmed(f'停止指令发送失败：{ex}')
+        self._refresh_controls()
+
+    def on_external_hold(self):
+        """A different page sent HOLD to this session's servo: lock and observe."""
+        self.estop_latched = True
+        self._stop_sent = True
+        self.phase = 'stopping'
+        self.detector = None
+        self._stop_at = time.monotonic()
+        self._stop_previous = None
+        self._stop_stable_count = 0
+        self._stop_reason = '其他页面下发保持停止'
+        self.status_text.set('外部保持停止已发送，正在核对角度稳定；软件急停已锁定')
         self._refresh_controls()
 
     def _stop_unconfirmed(self, reason):
