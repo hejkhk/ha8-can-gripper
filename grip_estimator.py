@@ -220,8 +220,8 @@ class GripDetector:
             self.start_angle = sample.angle_deg
         progress = (sample.angle_deg - self.start_angle) * self.settings.closing_direction
         self._max_progress = max(self._max_progress, progress)
-        # Bit 2 stall + bit 3..7 protection. Bit 0 indicates working, not fault.
-        fault = bool(sample.status_bits & 0xFC) or sample.current_a > self.settings.maximum_safe_current_a
+        # Bit 1 command error, bit 2 stall and bits 3..7 protection. Bit 0 is busy.
+        fault = bool(sample.status_bits & 0xFE) or sample.current_a > self.settings.maximum_safe_current_a
         if fault:
             self._fault_latched = True
         if self._fault_latched:
