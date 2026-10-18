@@ -19,4 +19,4 @@ jobs:
       - name: Compile and test
         run: |
           python -m py_compile HA8_UpperComputer.py ha8_protocol.py ha8_serial.py grip_estimator.py grip_panel.py auto_grip_panel.py
-          python -m unittest discover -s tests -v
+          xvfb-run -a python -m unittest discover -s tests -v
