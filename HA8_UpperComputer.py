@@ -43,8 +43,8 @@ from ha8_serial import HA8SerialTransport
 from grip_panel import GripPanel
 from auto_grip_panel import AutoGripPanel
 
-APP_TITLE = "HA8-U35H-M 全功能测试上位机"
-APP_VERSION = "3.2-beta"
+APP_TITLE = "HA8 智能夹爪上位机"
+APP_VERSION = "3.3-beta"
 
 
 class HA8UpperComputer(tk.Tk):
@@ -52,8 +52,8 @@ class HA8UpperComputer(tk.Tk):
         super().__init__()
 
         self.title(f"{APP_TITLE} V{APP_VERSION}")
-        self.geometry("1330x880")
-        self.minsize(1100, 730)
+        self.geometry("1080x760")
+        self.minsize(850, 640)
 
         self.protocol_parser = ResponseStreamParser()
         self.transport = HA8SerialTransport(
@@ -97,24 +97,28 @@ class HA8UpperComputer(tk.Tk):
         style.configure("BigValue.TLabel", font=("Consolas", 20, "bold"))
         style.configure("OK.TLabel", foreground="#187a2f", font=("Microsoft YaHei UI", 10, "bold"))
         style.configure("BAD.TLabel", foreground="#a31717", font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("Action.TButton", font=("Microsoft YaHei UI", 12, "bold"), padding=(17, 12))
+        style.configure("Danger.TButton", foreground="white", background="#b23232",
+                        font=("Microsoft YaHei UI", 12, "bold"), padding=(17, 12))
+        style.map("Danger.TButton", background=[("active", "#942525")],
+                  foreground=[("disabled", "#e5e5e5")])
 
     # ---------- UI ----------
     def _build_ui(self):
-        root = ttk.Frame(self, padding=10)
+        root = ttk.Frame(self, padding=12)
         root.pack(fill="both", expand=True)
 
         header = ttk.Frame(root)
-        header.pack(fill="x")
-        ttk.Label(header, text=APP_TITLE, style="Title.TLabel").pack(side="left")
-        ttk.Label(
-            header,
-            text="官方 USB 串口转接板 → HA8 | 115200 8N1 | 原生 HA8 协议",
-        ).pack(side="right")
+        header.pack(fill="x", pady=(0, 8))
+        ttk.Label(header, text="HA8 智能夹爪", style="Title.TLabel").pack(side="left")
+        self.advanced_tabs_btn = ttk.Button(header, text="显示高级调试  ›",
+                                            command=self.toggle_advanced_mode)
+        self.advanced_tabs_btn.pack(side="right")
 
         self._build_connection(root)
 
         self.nb = ttk.Notebook(root)
-        self.nb.pack(fill="both", expand=True, pady=(8, 8))
+        self.nb.pack(fill="both", expand=True, pady=(10, 6))
 
         self.tab_control = ttk.Frame(self.nb, padding=10)
         self.tab_monitor = ttk.Frame(self.nb, padding=10)
@@ -127,16 +131,17 @@ class HA8UpperComputer(tk.Tk):
         self.tab_raw = ttk.Frame(self.nb, padding=10)
         self.tab_debug = ttk.Frame(self.nb, padding=10)
 
-        self.nb.add(self.tab_control, text="位置控制")
-        self.nb.add(self.tab_monitor, text="数据监控")
-        self.nb.add(self.tab_grip, text="夹持检测（实验性）")
-        self.nb.add(self.tab_auto_grip, text="自动抓取测试")
-        self.nb.add(self.tab_maint, text="停止 / 标定")
-        self.nb.add(self.tab_scan, text="通讯检测")
-        self.nb.add(self.tab_config, text="参数读写")
-        self.nb.add(self.tab_advanced, text="同步 / 异步")
-        self.nb.add(self.tab_raw, text="HA8 原始协议")
-        self.nb.add(self.tab_debug, text="串口调试")
+        # All legacy tools remain available behind one deliberate opt-in.
+        self.nb.add(self.tab_auto_grip, text="夹爪控制")
+        self.advanced_tab_labels = [
+            (self.tab_control, "手动位置"), (self.tab_monitor, "数据监控"),
+            (self.tab_grip, "夹持分析"), (self.tab_maint, "停止 / 标定"),
+            (self.tab_scan, "通讯检测"), (self.tab_config, "参数读写"),
+            (self.tab_advanced, "同步 / 异步"), (self.tab_raw, "HA8 协议"),
+            (self.tab_debug, "串口调试"),
+        ]
+        for page, title in self.advanced_tab_labels:
+            self.nb.add(page, text=title)
 
         self._build_control_tab()
         self._build_monitor_tab()
@@ -152,45 +157,62 @@ class HA8UpperComputer(tk.Tk):
         self._build_debug_tab()
         self._build_log(root)
 
-    def _build_connection(self, parent):
-        box = ttk.LabelFrame(parent, text="官方舵机转接板 USB 串口直连", padding=8)
-        box.pack(fill="x", pady=(8, 0))
-        ttk.Label(box, text="串口").grid(row=0, column=0, padx=4, pady=4)
-        self.port_var = tk.StringVar()
-        self.port_combo = ttk.Combobox(box, textvariable=self.port_var, width=18, state="normal")
-        self.port_combo.grid(row=0, column=1, padx=4)
-        ttk.Button(box, text="刷新", command=self.refresh_ports).grid(row=0, column=2, padx=4)
+        self.show_advanced = False
+        self._set_advanced_mode(False)
 
-        ttk.Label(box, text="波特率").grid(row=0, column=3, padx=(14, 4))
+    def _set_advanced_mode(self, show: bool):
+        self.show_advanced = bool(show)
+        if not show:
+            self.nb.select(self.tab_auto_grip)
+        for page, title in self.advanced_tab_labels:
+            if show:
+                self.nb.add(page, text=title)
+            else:
+                self.nb.hide(page)
+        if show:
+            self.connection_details.pack(fill="x", padx=6, pady=(2, 5))
+        else:
+            self.connection_details.pack_forget()
+        self.advanced_tabs_btn.configure(text="收起高级调试  ‹" if show else "显示高级调试  ›")
+
+    def toggle_advanced_mode(self):
+        self._set_advanced_mode(not self.show_advanced)
+
+    def _build_connection(self, parent):
+        box = ttk.LabelFrame(parent, text="① 连接舵机", padding=10)
+        box.pack(fill="x")
+        primary = ttk.Frame(box)
+        primary.pack(fill="x")
+        ttk.Label(primary, text="串口").pack(side="left", padx=(2, 6))
+        self.port_var = tk.StringVar()
+        self.port_combo = ttk.Combobox(primary, textvariable=self.port_var,
+                                       width=17, state="readonly")
+        self.port_combo.pack(side="left")
+        ttk.Button(primary, text="刷新", command=self.refresh_ports).pack(side="left", padx=6)
+        self.connect_btn = ttk.Button(primary, text="连接设备", command=self.toggle_connection)
+        self.connect_btn.pack(side="left", padx=(10, 6))
+        self.conn_var = tk.StringVar(value="未连接")
+        self.conn_label = ttk.Label(primary, textvariable=self.conn_var, style="BAD.TLabel")
+        self.conn_label.pack(side="left", padx=5)
+
+        # Baud rate, device ID and low-level Ping are advanced settings.
+        self.connection_details = ttk.Frame(box)
+        ttk.Label(self.connection_details, text="波特率").pack(side="left", padx=(2, 6))
         self.serial_baud_var = tk.StringVar(value="115200")
         self.serial_baud_combo = ttk.Combobox(
-            box, textvariable=self.serial_baud_var,
+            self.connection_details, textvariable=self.serial_baud_var,
             values=["9600", "57600", "115200", "230400"],
-            width=12, state="readonly",
+            width=11, state="readonly",
         )
-        self.serial_baud_combo.grid(row=0, column=4, padx=4)
-
-        self.connect_btn = ttk.Button(box, text="连接", command=self.toggle_connection)
-        self.connect_btn.grid(row=0, column=5, padx=8)
-        self.conn_var = tk.StringVar(value="未连接")
-        self.conn_label = ttk.Label(box, textvariable=self.conn_var, style="BAD.TLabel")
-        self.conn_label.grid(row=0, column=6, padx=8)
-
-        ttk.Label(box, text="舵机 ID").grid(row=0, column=7, padx=(14, 4))
+        self.serial_baud_combo.pack(side="left")
+        ttk.Label(self.connection_details, text="舵机 ID").pack(side="left", padx=(16, 6))
         self.servo_id_var = tk.IntVar(value=0)
-        ttk.Spinbox(box, from_=0, to=254, textvariable=self.servo_id_var, width=7).grid(
-            row=0, column=8, padx=4
-        )
-        ttk.Button(box, text="Ping", command=self.ping_servo).grid(row=0, column=9, padx=4)
+        ttk.Spinbox(self.connection_details, from_=0, to=254, textvariable=self.servo_id_var,
+                    width=6).pack(side="left")
+        ttk.Button(self.connection_details, text="Ping", command=self.ping_servo).pack(side="left", padx=10)
         self.online_var = tk.StringVar(value="舵机：未知")
-        self.online_label = ttk.Label(box, textvariable=self.online_var)
-        self.online_label.grid(row=0, column=10, padx=8)
-
-        ttk.Label(
-            box,
-            text="UART 8N1 · 发送完整 HA8 指令，不经过 CAN/STM32",
-            foreground="#555555",
-        ).grid(row=1, column=0, columnspan=11, sticky="w", padx=6, pady=(5, 0))
+        self.online_label = ttk.Label(self.connection_details, textvariable=self.online_var)
+        self.online_label.pack(side="left", padx=6)
 
     def _build_control_tab(self):
         left = ttk.LabelFrame(self.tab_control, text="目标运动", padding=12)
@@ -456,7 +478,7 @@ class HA8UpperComputer(tk.Tk):
         box = ttk.LabelFrame(parent, text="运行日志", padding=6)
         box.pack(fill="both", expand=False)
 
-        self.log_text = tk.Text(box, height=9, wrap="none", font=("Consolas", 9))
+        self.log_text = tk.Text(box, height=4, wrap="none", font=("Consolas", 9))
         self.log_text.pack(side="left", fill="both", expand=True)
 
         scroll = ttk.Scrollbar(box, orient="vertical", command=self.log_text.yview)
@@ -502,9 +524,13 @@ class HA8UpperComputer(tk.Tk):
             self.protocol_parser.reset()
             self.conn_var.set(f"已连接 {port} · {baud} 8N1")
             self.conn_label.configure(style="OK.TLabel")
-            self.connect_btn.configure(text="断开")
+            self.connect_btn.configure(text="断开连接")
             self.serial_baud_combo.configure(state="disabled")
-            self.log(f"官方 USB 串口已连接：{port}, {baud} 8N1，原生 HA8 帧，不经过 CAN")
+            self.log(f"官方 USB 串口已连接：{port}, {baud} 8N1，原生 HA8 帧")
+            # Read-only polling starts automatically; no need to visit another page.
+            self.monitor_period_var.set("100")
+            if not self.monitor_running:
+                self.toggle_monitor()
         except Exception as exc:
             self.transport.close()
             self.conn_var.set("连接失败")
@@ -519,7 +545,7 @@ class HA8UpperComputer(tk.Tk):
         self.protocol_parser.reset()
         self.conn_var.set("未连接")
         self.conn_label.configure(style="BAD.TLabel")
-        self.connect_btn.configure(text="连接")
+        self.connect_btn.configure(text="连接设备")
         self.serial_baud_combo.configure(state="readonly")
         self.online_var.set("舵机：未知")
         self.online_label.configure(style="")
@@ -612,6 +638,10 @@ class HA8UpperComputer(tk.Tk):
 
     def toggle_monitor(self):
         if self.monitor_running:
+            panel = getattr(self, "auto_grip_panel", None)
+            if panel is not None and panel.phase:
+                messagebox.showwarning("监控正在使用", "夹爪运动或停止观察期间不能关闭监控")
+                return
             self.stop_monitor()
             return
 
