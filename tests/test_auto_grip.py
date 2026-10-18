@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from auto_grip_panel import AutoGripPanel
 from HA8_UpperComputer import HA8UpperComputer
+import os
+import tkinter as tk
 from ha8_protocol import HA8Protocol, STOP_HOLD
 from grip_estimator import GripDetector, GripSample, GripState
 
@@ -68,6 +70,32 @@ def make_panel():
     panel.speed = Value('10')
     panel.power = Value('1500')
     return panel
+
+
+@unittest.skipUnless(os.name == 'nt' or os.environ.get('DISPLAY'),
+                     'No GUI display available')
+class AutoGripGuiSmokeTests(unittest.TestCase):
+    def test_page_has_grip_open_stop_monitor_and_limits(self):
+        root = tk.Tk()
+        root.withdraw()
+        class Stub:
+            monitor_running = False
+            transport = type('Transport', (), {'is_open': False})()
+            def toggle_monitor(self): self.monitor_running = not self.monitor_running
+        panel = None
+        try:
+            panel = AutoGripPanel(root, Stub())
+            self.assertTrue(panel.grip_btn.winfo_exists())
+            self.assertTrue(panel.open_btn.winfo_exists())
+            self.assertTrue(panel.monitor_btn.winfo_exists())
+            self.assertEqual(panel.grip_min.get(), '')
+            self.assertEqual(panel.open_max.get(), '')
+            self.assertEqual(len(panel.param_entries), 5)
+            panel.destroy()
+        finally:
+            if panel is not None and panel.winfo_exists():
+                panel.destroy()
+            root.destroy()
 
 
 class AutoGripSafetyTests(unittest.TestCase):
