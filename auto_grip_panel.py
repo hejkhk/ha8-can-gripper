@@ -165,7 +165,8 @@ class AutoGripPanel(ttk.Frame):
                 window_size=ref.window_size)
             self.detector=GripDetector(settings,self.app.grip_panel.detector.curve)
             self.detector.arm(time.monotonic())
-            self._preflight()  # Confirmation dialogs can outlive fresh feedback.
+            if self._preflight() != sid:
+                raise RuntimeError('舵机 ID 在确认期间发生改变，取消本次动作')  # Confirmation dialogs can outlive fresh feedback.
             self.phase='gripping';self.started=time.monotonic();self._stop_sent=False
             self.active_servo_id=sid
             self.session_min,self.session_max,self.session_hold=lo,hi,hold
@@ -189,7 +190,8 @@ class AutoGripPanel(ttk.Frame):
             if not messagebox.askyesno('张开确认',f'将张开至 {hi:.1f}°。确认机械限位与周边安全？'):
                 return
             self.detector=None
-            self._preflight()  # Re-check conditions after modal confirmation.
+            if self._preflight() != sid:
+                raise RuntimeError('舵机 ID 在确认期间发生改变，取消本次动作')  # Re-check after modal.
             self.phase='opening';self.started=time.monotonic();self._stop_sent=False
             self.active_servo_id=sid
             self.session_min,self.session_max,self.session_hold=lo,hi,hold
