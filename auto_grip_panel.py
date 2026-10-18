@@ -25,6 +25,7 @@ class AutoGripPanel(ttk.Frame):
         self.estop_latched = False
         self.phase = None
         self.servo_id = None
+        self.active_servo_id = None  # Freeze the target ID until reset.
         self.last_at = None
         self.angle = None
         self.current = None
@@ -98,7 +99,7 @@ class AutoGripPanel(ttk.Frame):
         sid=self.app.servo_id()
         if self.last_at is None or time.monotonic()-self.last_at>self.STALE_S or self.servo_id!=sid:
             raise RuntimeError('当前舵机角度/电流反馈已过期或ID不匹配，禁止盲动')
-        if self.status_bits is None or self.status_bits & 0xFC:
+        if self.status_bits is None or self.status_bits & 0xFE:
             raise RuntimeError('存在堵转或设备保护故障，禁止运动')
         return sid
 
@@ -125,6 +126,7 @@ class AutoGripPanel(ttk.Frame):
             self.detector=GripDetector(settings,self.app.grip_panel.detector.curve)
             self.detector.arm(time.monotonic())
             self.phase='gripping';self.started=time.monotonic();self._stop_sent=False
+            self.active_servo_id=sid
             self._move(lo,vel,power,sid)
             self.status_text.set('抓取中：等待接触判定，或在最小角度前停止')
         except Exception as e:
@@ -141,6 +143,7 @@ class AutoGripPanel(ttk.Frame):
                 return
             self.detector=None
             self.phase='opening';self.started=time.monotonic();self._stop_sent=False
+            self.active_servo_id=sid
             self._move(hi,vel,power,sid)
             self.status_text.set('张开中，等待角度反馈确认')
         except Exception as e:
@@ -155,7 +158,7 @@ class AutoGripPanel(ttk.Frame):
             power=int(float(self.hold_power.get()))
             if not 0<=power<=30000:power=0
             if self.app.transport.is_open:
-                self.app.send_ha8(HA8Protocol.stop(self.app.servo_id(),STOP_HOLD,power),
+                self.app.send_ha8(HA8Protocol.stop(self.active_servo_id if self.active_servo_id is not None else self.app.servo_id(),STOP_HOLD,power),
                                   f'自动抓取测试：保持停止（{reason}）')
             else:
                 raise RuntimeError('串口已断开')
@@ -180,10 +183,12 @@ class AutoGripPanel(ttk.Frame):
             return
         self.estop_latched=False
         self._stop_sent=False
+        self.active_servo_id=None
         self.status_text.set('软件急停锁定已解除，待机')
 
     def on_monitor(self,servo_id,fields):
-        if servo_id != self.app.servo_id():
+        expected_id = self.active_servo_id if self.phase and self.active_servo_id is not None else self.app.servo_id()
+        if servo_id != expected_id:
             return
         now=time.monotonic()
         self.servo_id=servo_id;self.last_at=now
@@ -193,7 +198,7 @@ class AutoGripPanel(ttk.Frame):
         self.angle_text.set(f'{self.angle:.1f} °')
         self.current_text.set(f'{self.current:.3f} A')
         if not self.phase or self.estop_latched:return
-        if self.status_bits & 0xFC:
+        if self.status_bits & 0xFE:
             self.emergency_stop();return
         if self.phase=='gripping' and self.detector is not None:
             result=self.detector.observe(GripSample(now,self.angle,self.current,self.status_bits))
@@ -212,12 +217,20 @@ class AutoGripPanel(ttk.Frame):
 
     def _tick(self):
         if self.phase and not self.estop_latched:
-            if (self.last_at is None or time.monotonic()-self.last_at>self.STALE_S
+            try:
+                selected_id = self.app.servo_id()
+            except (ValueError, tk.TclError):
+                selected_id = None
+            if self.active_servo_id is not None and selected_id != self.active_servo_id:
+                self.emergency_stop()  # Stop original servo, never the new selection.
+            elif (self.last_at is None or time.monotonic()-self.last_at>self.STALE_S
                     or self.started is not None and time.monotonic()-self.started>20.0):
                 self.emergency_stop()
         self._job=self.after(self.POLL_MS,self._tick)
 
     def disconnected(self):
+        if self.phase or self._stop_sent:
+            self.estop_latched=True  # Reconnect must not silently re-enable motion.
         self.phase=None;self.detector=None
         self.last_at=None;self.servo_id=None
         self.current_text.set('— A');self.angle_text.set('— °')
