@@ -55,42 +55,89 @@ class AutoGripPanel(ttk.Frame):
         self._job = self.after(self.POLL_MS, self._tick)
 
     def _build(self):
-        group = ttk.LabelFrame(self, text='自动抓取功能台架测试（单舵机）', padding=12)
-        group.pack(fill='x')
-        items = [
-            ('抓取最小角度 °',self.grip_min),('张开最大角度 °',self.open_max),
-            ('运动速度 °/s',self.speed),('运动功率上限 mW',self.power),
-            ('停止保持功率 mW',self.hold_power),
-        ]
-        for i,(name,var) in enumerate(items):
-            rr,cc=divmod(i,3)
-            ttk.Label(group,text=name).grid(row=rr*2,column=cc,sticky='w',padx=8,pady=(5,1))
-            entry = ttk.Entry(group,textvariable=var,width=18)
-            entry.grid(row=rr*2+1,column=cc,sticky='w',padx=8,pady=(1,8))
+        # Daily-use controls only. Calibration and algorithm tuning live in Advanced.
+        main = ttk.Frame(self, padding=(14, 10))
+        main.pack(fill="both", expand=True)
+
+        status = ttk.LabelFrame(main, text="② 当前状态", padding=14)
+        status.pack(fill="x", pady=(0, 12))
+        values = ttk.Frame(status)
+        values.pack(fill="x")
+        ttk.Label(values, text="实时电流", font=("Microsoft YaHei UI", 11)).grid(
+            row=0, column=0, sticky="w", padx=(0, 85))
+        ttk.Label(values, text="当前位置", font=("Microsoft YaHei UI", 11)).grid(
+            row=0, column=1, sticky="w")
+        ttk.Label(values, textvariable=self.current_text, font=("Consolas", 24, "bold")).grid(
+            row=1, column=0, sticky="w", padx=(0, 85), pady=(2, 6))
+        ttk.Label(values, textvariable=self.angle_text, font=("Consolas", 24, "bold")).grid(
+            row=1, column=1, sticky="w", pady=(2, 6))
+        ttk.Label(status, textvariable=self.feedback_text, foreground="#555555").pack(anchor="w")
+
+        limits = ttk.LabelFrame(main, text="③ 夹爪运动范围", padding=14)
+        limits.pack(fill="x", pady=(0, 12))
+        ttk.Label(limits, text="抓取最小角度 (°)", font=("Microsoft YaHei UI", 11)).grid(
+            row=0, column=0, sticky="w", padx=(0, 50))
+        ttk.Label(limits, text="张开最大角度 (°)", font=("Microsoft YaHei UI", 11)).grid(
+            row=0, column=1, sticky="w")
+        self.param_entries = []
+        for column, variable in enumerate((self.grip_min, self.open_max)):
+            entry = ttk.Entry(limits, textvariable=variable, width=19, font=("Consolas", 14))
+            entry.grid(row=1, column=column, sticky="w", pady=7, padx=(0, 50))
             self.param_entries.append(entry)
-        ttk.Label(group,text='当前电流').grid(row=4,column=0,sticky='w',padx=8)
-        ttk.Label(group,textvariable=self.current_text,font=('Consolas',20,'bold')).grid(row=5,column=0,sticky='w',padx=8)
-        ttk.Label(group,text='当前角度').grid(row=4,column=1,sticky='w',padx=8)
-        ttk.Label(group,textvariable=self.angle_text,font=('Consolas',20,'bold')).grid(row=5,column=1,sticky='w',padx=8)
-        ttk.Label(group, textvariable=self.feedback_text, foreground='#555555').grid(
-            row=6,column=0,columnspan=3,sticky='w',padx=8,pady=5)
-        actions=ttk.Frame(self)
-        actions.pack(fill='x',pady=12)
-        self.grip_btn=ttk.Button(actions,text='抓取',command=self.grip)
-        self.grip_btn.pack(side='left',padx=8)
-        self.open_btn=ttk.Button(actions,text='张开',command=self.open)
-        self.open_btn.pack(side='left',padx=8)
-        self.monitor_btn=ttk.Button(actions,text='开启实时监控',command=self.toggle_panel_monitor)
-        self.monitor_btn.pack(side='left',padx=8)
-        ttk.Button(actions,text='一键急停（软件）',command=self.emergency_stop).pack(side='left',padx=8)
-        ttk.Button(actions,text='解除软件急停锁定',command=self.reset_estop).pack(side='left',padx=8)
-        ttk.Label(self,textvariable=self.status_text,wraplength=1130,foreground='#a31717',
-                  font=('Microsoft YaHei UI',12,'bold')).pack(fill='x',pady=8)
-        ttk.Label(self,text='必须预先确认舵机旋转方向：此页只支持“抓取朝更小角度、张开朝更大角度”。\n'
-                  '抓取遇到疑似接触/疑似稳定或最小角度即下发保持停止；仅是实验性判定，不能保证夹持力。\n'
-                  '软件急停依赖 USB 通讯及舵机正常响应，不能替代独立断电硬件急停。',
-                  foreground='#a31717',justify='left',wraplength=1130).pack(anchor='w')
+        ttk.Label(limits, text="角度减小＝闭合；角度增大＝张开。两端数值必须先实际标定。",
+                  foreground="#777777").grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        ttk.Label(main, text="④ 操作", font=("Microsoft YaHei UI", 11, "bold")).pack(
+            anchor="w", pady=(0, 7))
+        actions = ttk.Frame(main)
+        actions.pack(fill="x")
+        self.grip_btn = ttk.Button(actions, text="抓取  /  闭合", command=self.grip,
+                                   width=19, style="Action.TButton")
+        self.grip_btn.pack(side="left", padx=(0, 12))
+        self.open_btn = ttk.Button(actions, text="张开", command=self.open,
+                                   width=15, style="Action.TButton")
+        self.open_btn.pack(side="left", padx=(0, 12))
+        self.stop_btn = ttk.Button(actions, text="立即停止（软件）", command=self.emergency_stop,
+                                   style="Danger.TButton")
+        self.stop_btn.pack(side="left")
+
+        tools = ttk.Frame(main)
+        tools.pack(fill="x", pady=(12, 7))
+        self.reset_btn = ttk.Button(tools, text="解除停止锁定", command=self.reset_estop)
+        self.reset_btn.pack(side="left")
+        self.settings_btn = ttk.Button(tools, text="更多设置  ▾", command=self.toggle_settings)
+        self.settings_btn.pack(side="right")
+
+        self.advanced_settings = ttk.LabelFrame(main, text="高级参数（未标定前请勿提高）", padding=12)
+        for index, (label, variable) in enumerate((
+            ("运动速度 (°/s)", self.speed), ("运动功率上限 (mW)", self.power),
+            ("停止保持功率 (mW)", self.hold_power)
+        )):
+            ttk.Label(self.advanced_settings, text=label).grid(
+                row=index, column=0, sticky="w", padx=6, pady=4)
+            entry = ttk.Entry(self.advanced_settings, textvariable=variable, width=18)
+            entry.grid(row=index, column=1, sticky="w", padx=6, pady=4)
+            self.param_entries.append(entry)
+        self.monitor_btn = ttk.Button(self.advanced_settings,
+                                      text="开启实时监控", command=self.toggle_panel_monitor)
+        self.monitor_btn.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 2))
+        self.settings_visible = False
+
+        ttk.Label(main, textvariable=self.status_text, foreground="#a31717",
+                  wraplength=850, font=("Microsoft YaHei UI", 11)).pack(
+            fill="x", pady=(8, 6))
+        ttk.Label(main,
+                  text="实验功能：接触检测不等于抓稳。软件停止依赖串口，必须配备独立硬件断电急停。",
+                  foreground="#a31717", wraplength=850).pack(anchor="w")
         self._refresh_controls()
+
+    def toggle_settings(self):
+        self.settings_visible = not self.settings_visible
+        if self.settings_visible:
+            self.advanced_settings.pack(fill="x", pady=(0, 8))
+        else:
+            self.advanced_settings.pack_forget()
+        self.settings_btn.configure(text="收起设置  ▴" if self.settings_visible else "更多设置  ▾")
 
     def toggle_panel_monitor(self):
         """Use the existing shared monitor task; do not create competing serial pollers."""
@@ -107,10 +154,20 @@ class AutoGripPanel(ttk.Frame):
         busy = bool(self.phase)
         for entry in getattr(self, 'param_entries', ()):
             entry.configure(state='disabled' if busy else 'normal')
+        # Keep unavailable actions visibly disabled instead of allowing blind attempts.
+        connected = self.app.transport.is_open
+        fresh = self.last_at is not None and time.monotonic() - self.last_at <= self.STALE_S
+        ready = connected and self.app.monitor_running and fresh
         for btn_name in ('grip_btn', 'open_btn'):
             btn = getattr(self, btn_name, None)
             if btn is not None:
-                btn.configure(state='disabled' if busy or self.estop_latched else 'normal')
+                btn.configure(state='normal' if ready and not busy and not self.estop_latched else 'disabled')
+        stop_btn = getattr(self, 'stop_btn', None)
+        if stop_btn is not None:
+            stop_btn.configure(state='normal' if connected else 'disabled')
+        reset_btn = getattr(self, 'reset_btn', None)
+        if reset_btn is not None:
+            reset_btn.configure(state='normal' if self.estop_latched and not busy else 'disabled')
         monitor_btn = getattr(self, 'monitor_btn', None)
         if monitor_btn is not None:
             monitor_btn.configure(text='停止实时监控' if self.app.monitor_running else '开启实时监控',
@@ -317,7 +374,9 @@ class AutoGripPanel(ttk.Frame):
         self.angle_text.set(f'{self.angle:.1f} °')
         self.current_text.set(f'{self.current:.3f} A')
         if hasattr(self, 'feedback_text'):
-            self.feedback_text.set(f'实时反馈：ID={servo_id}，状态=0x{self.status_bits:02X}')
+            self.feedback_text.set(f'监控正常  ·  舵机 ID {servo_id}'
+                                   if not self.status_bits & 0xFE
+                                   else '设备报告异常，请停止并检查')
         if self.phase == 'stopping':
             self._observe_stopping(now)
             return
@@ -347,7 +406,7 @@ class AutoGripPanel(ttk.Frame):
                 self.current_text.set('— A')
                 self.angle_text.set('— °')
             elif not self.app.monitor_running:
-                self.feedback_text.set('实时反馈：周期监控已关闭')
+                self.feedback_text.set('监控已暂停，可在“更多设置”中重新开启')
         if self.phase:
             now=time.monotonic()
             if self.phase == 'stopping':
