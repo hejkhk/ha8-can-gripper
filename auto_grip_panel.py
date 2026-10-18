@@ -344,6 +344,8 @@ class AutoGripPanel(ttk.Frame):
             fresh = self.last_at is not None and time.monotonic() - self.last_at <= self.STALE_S
             if not fresh:
                 self.feedback_text.set('实时反馈：无有效数据 / 数据超时')
+                self.current_text.set('— A')
+                self.angle_text.set('— °')
             elif not self.app.monitor_running:
                 self.feedback_text.set('实时反馈：周期监控已关闭')
         if self.phase:
@@ -362,6 +364,7 @@ class AutoGripPanel(ttk.Frame):
                 elif (self.last_at is None or now-self.last_at>self.STALE_S
                         or self.started is not None and now-self.started>20.0):
                     self.emergency_stop()
+        self._refresh_controls()
         self._job=self.after(self.POLL_MS,self._tick)
 
     def disconnected(self):
