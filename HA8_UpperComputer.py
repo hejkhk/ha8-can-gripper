@@ -546,12 +546,29 @@ class HA8UpperComputer(tk.Tk):
             self.log(f"ERROR: {exc}")
             messagebox.showerror("操作失败", str(exc))
 
-    def send_ha8(self, frame: bytes, label: str):
+    def send_ha8(self, frame: bytes, label: str, owner: str | None = None):
         self.ensure_connected()
+        panel = getattr(self, 'auto_grip_panel', None)
+        busy = panel is not None and (
+            panel.phase is not None or (panel.estop_latched and panel.active_servo_id is not None)
+        )
+        external_hold = False
+        if busy and owner != 'auto_grip':
+            cmd = frame[2] if len(frame) >= 3 else -1
+            # Allow passive diagnostics; motion/configuration commands are exclusive.
+            read_only = cmd in (CMD_PING, CMD_READ_DATA, CMD_MONITOR, 0x0A, 0x10)
+            external_hold = (
+                cmd == 0x18 and len(frame) == 9
+                and frame[4] == panel.active_servo_id and frame[5] == STOP_HOLD
+            )
+            if not read_only and not external_hold:
+                raise RuntimeError('自动抓取正在运行或故障锁定；禁止其他页面覆盖命令，请先使用自动页软件急停')
         self.transport.send_ha8(frame)
         self.tx_ha8_count += 1
         self.log(f"HA8 TX [{label}] {hex_bytes(frame)}")
         self._update_counter()
+        if external_hold:
+            panel.on_external_hold()
 
     # ---------- commands ----------
     def ping_servo(self):
@@ -864,6 +881,9 @@ class HA8UpperComputer(tk.Tk):
                 f"即将发送 {len(data)} 字节：\\n{hex_bytes(data)}\\n\\n确认？"
             ):
                 return
+            panel = getattr(self, 'auto_grip_panel', None)
+            if panel is not None and (panel.phase is not None or (panel.estop_latched and panel.active_servo_id is not None)):
+                raise RuntimeError('自动抓取运行或故障锁定中，原始串口写入被禁止')
             self.transport.send_raw(data)
             self.log(f"UART TX RAW {hex_bytes(data)}")
         self.safe_action(act)
