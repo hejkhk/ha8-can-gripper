@@ -171,8 +171,12 @@ class HA8UpperComputer(tk.Tk):
                 self.nb.hide(page)
         if show:
             self.connection_details.pack(fill="x", padx=6, pady=(2, 5))
+            self.log_box.pack(fill="x", pady=(6, 0))
+            self.log_foot.pack(fill="x", pady=(6, 0))
         else:
             self.connection_details.pack_forget()
+            self.log_box.pack_forget()
+            self.log_foot.pack_forget()
         self.advanced_tabs_btn.configure(text="收起高级调试  ‹" if show else "显示高级调试  ›")
 
     def toggle_advanced_mode(self):
@@ -478,6 +482,7 @@ class HA8UpperComputer(tk.Tk):
         box = ttk.LabelFrame(parent, text="运行日志", padding=6)
         box.pack(fill="both", expand=False)
 
+        self.log_box = box
         self.log_text = tk.Text(box, height=4, wrap="none", font=("Consolas", 9))
         self.log_text.pack(side="left", fill="both", expand=True)
 
@@ -486,6 +491,7 @@ class HA8UpperComputer(tk.Tk):
         self.log_text.configure(yscrollcommand=scroll.set)
 
         foot = ttk.Frame(parent)
+        self.log_foot = foot
         foot.pack(fill="x", pady=(6, 0))
 
         self.counter_var = tk.StringVar(value="HA8 TX 0 | HA8 RX 0")
