@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from auto_grip_panel import AutoGripPanel
+from HA8_UpperComputer import HA8UpperComputer
 from ha8_protocol import HA8Protocol, STOP_HOLD
 from grip_estimator import GripDetector, GripSample, GripState
 
@@ -26,7 +27,7 @@ class FakeApp:
         self.monitor_running = True
     def servo_id(self):
         return self.selected_id
-    def send_ha8(self, frame, label):
+    def send_ha8(self, frame, label, owner=None):
         self.sent.append((frame, label))
     def log(self, message):
         pass
@@ -128,6 +129,37 @@ class AutoGripSafetyTests(unittest.TestCase):
         panel.open_max.set("10")
         with self.assertRaises(ValueError):
             panel._parameters()
+
+    def test_command_arbiter_blocks_other_page_movement(self):
+        panel = make_panel()
+        class AppShell:
+            auto_grip_panel = panel
+            transport = type('Transport', (), {'send_ha8': lambda self, data: None})()
+            tx_ha8_count = 0
+            def ensure_connected(self): pass
+            def log(self, message): pass
+            def _update_counter(self): pass
+        app = AppShell()
+        move = HA8Protocol.move(3, 60, True, mode='velocity',
+                                velocity_dps=10, power_mw=1000)
+        with self.assertRaises(RuntimeError):
+            HA8UpperComputer.send_ha8(app, move, '位置控制')
+        HA8UpperComputer.send_ha8(app, HA8Protocol.monitor(3), '监控')
+        self.assertEqual(app.tx_ha8_count, 1)
+
+    def test_other_page_hold_is_permitted_and_latched(self):
+        panel = make_panel()
+        class AppShell:
+            auto_grip_panel = panel
+            transport = type('Transport', (), {'send_ha8': lambda self, data: None})()
+            tx_ha8_count = 0
+            def ensure_connected(self): pass
+            def log(self, message): pass
+            def _update_counter(self): pass
+        app = AppShell()
+        HA8UpperComputer.send_ha8(app, HA8Protocol.stop(3, STOP_HOLD, 500), '停止')
+        self.assertTrue(panel.estop_latched)
+        self.assertEqual(panel.phase, 'stopping')
 
     def test_error_bit_blocks_start(self):
         panel = make_panel()
