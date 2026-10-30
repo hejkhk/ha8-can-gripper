@@ -81,7 +81,7 @@ class CircuitModelTests(unittest.TestCase):
 
     def test_manual_theoretical_reference_points(self):
         from protocol import estimate_circuit_force_g, MANUFACTURER_POINTS
-        rf_kohm = 150.0
+        rf_kohm = 158.0
         for force_g, conductance in MANUFACTURER_POINTS:
             voltage = 0.1 * (1 + rf_kohm * conductance)
             adc = voltage / 3.3 * 4095
@@ -91,13 +91,19 @@ class CircuitModelTests(unittest.TestCase):
 
     def test_current_offset_and_nonextrapolation(self):
         from protocol import estimate_circuit_force_g
-        rf = 150.0
+        rf = 158.0
         z = 137.0
         self.assertEqual(estimate_circuit_force_g(z, rf, z), 0)
         adc500 = z + (0.1 * rf * 0.0556) / 3.3 * 4095
         self.assertAlmostEqual(estimate_circuit_force_g(adc500, rf, z), 500, delta=1e-6)
         self.assertIsNone(estimate_circuit_force_g(4095, 150, z))
         self.assertIsNone(estimate_circuit_force_g(123, None, z))
+
+    def test_158k_2kg_voltage_near_adc_top(self):
+        from protocol import estimate_circuit_force_g
+        voltage = 0.1 * (1 + 158.0 / 5.0)
+        self.assertAlmostEqual(voltage, 3.26, places=3)
+        self.assertAlmostEqual(estimate_circuit_force_g(voltage / 3.3 * 4095, 158.0), 2000.0, delta=1e-5)
 
     def test_300k_cannot_cover_2kg(self):
         self.assertGreater(0.1 * (1 + 300 / 5), 3.3)
