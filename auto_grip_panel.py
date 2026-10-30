@@ -349,7 +349,7 @@ class AutoGripPanel(ttk.Frame):
             )
             lab = getattr(self.app, "pressure_lab", None)
             if lab is not None:
-                lab.on_grip_end(self._stop_reason)
+                lab.on_grip_end(self._stop_reason, confirmed_motion_stop=not self.estop_latched)
                 self.pressure_validation_text.set("压力验证：" + lab.evidence_text.get())
             self._refresh_controls()
 
