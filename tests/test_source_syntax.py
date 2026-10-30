@@ -19,6 +19,7 @@ class SourceSyntaxTests(unittest.TestCase):
             "pressure_validation.py",
             "pressure_protocol.py",
             "grip_force_calibration.py",
+            "calibration_capture.py",
             "pressure_lab_panel.py",
             "serial_device_discovery.py",
             "legacy/usb_can_cdc.py",
