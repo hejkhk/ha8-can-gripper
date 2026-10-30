@@ -16,8 +16,8 @@ class SourceSyntaxTests(unittest.TestCase):
             "grip_estimator.py",
             "grip_panel.py",
             "auto_grip_panel.py",
-            "usb_can_cdc.py",
-            "f103_uart_bridge.py",
+            "legacy/usb_can_cdc.py",
+            "legacy/f103_uart_bridge.py",
         ]
         for name in modules:
             with self.subTest(module=name):
