@@ -12,7 +12,7 @@ from tkinter import ttk, messagebox, filedialog
 from serial.tools import list_ports
 
 from pressure_validation import PressureSerialLink, PressureEvidence, CurveRecorder
-from grip_force_calibration import ForceMap, DEFAULT_PATH
+from grip_force_calibration import ForceMap, DEFAULT_PATH, observed_closing_motion
 
 
 class PressureLabPanel(ttk.Frame):
@@ -218,18 +218,16 @@ class PressureLabPanel(ttk.Frame):
         now = time.monotonic()
         angle = float(fields["angle_deg"])
         previous = self._previous_ha8
-        self._previous_ha8 = (now, angle)
-        closing_motion = False
-        if previous is not None:
-            dt = now - previous[0]
-            closing_motion = (0.03 <= dt <= 1.0 and
-                              previous[1] - angle >= max(0.15, 0.8 * dt))
+        self._previous_ha8 = (servo_id, now, angle)
+        closing_motion = observed_closing_motion(previous, servo_id, now, angle)
         phase = self.app.auto_grip_panel.phase or "idle"
-        if self.manual_closing.get() and phase == "idle" and closing_motion:
+        if phase == "gripping" and not closing_motion:
+            phase = "idle"  # 运动停止时不能把静态电流作为力标定样本
+        elif self.manual_closing.get() and phase == "idle" and closing_motion:
             phase = "gripping"
         if self.model is not None:
             force = self.model.predict(float(fields["current_ma"])/1000,
-                                       angle, phase if closing_motion else "idle", int(fields["status"]))
+                                       angle, phase, int(fields["status"]))
             gap = self.model.gap_mm(float(fields["angle_deg"]))
             if force is None:
                 text = "离线估算：静止/未覆盖的工况，无法估计"
