@@ -449,7 +449,8 @@ class AutoGripPanel(ttk.Frame):
         self.phase=None;self.detector=None
         self.last_at=None;self.servo_id=None
         self.current_text.set('— A');self.angle_text.set('— °')
-        self.model_force_text.set('离线估算：舵机断线，停止显示')
+        if hasattr(self, 'model_force_text'):
+            self.model_force_text.set('离线估算：舵机断线，停止显示')
         self.status_text.set('串口已断开，停止检测；软件无法保证电机停止')
         if hasattr(self, 'feedback_text'):
             self.feedback_text.set('实时反馈：设备未连接')
