@@ -4,3 +4,13 @@ __pycache__/
 venv/
 .env
 *.log
+# Local experiments, calibration, editor and build files
+*.csv
+*.tsv
+calibration.json
+*.jsonl
+.pytest_cache/
+.vscode/
+.idea/
+*.uvoptx
+*.uvguix*
