@@ -1,4 +1,4 @@
-# HA8 智能夹爪｜统一 Windows 上位机（V3.5-beta）
+# HA8 智能夹爪｜统一 Windows 上位机（V3.6-beta｜实验性单次标定）
 
 **只运行一个上位机：`HA8_UpperComputer.py`。** 它同时负责 HA8-U35H-M 蜗轮蜗杆夹爪、STM32F103 薄膜压力采集，以及“舵机电流—压力响应”验证实验。
 
@@ -48,8 +48,7 @@ pressure_lab_panel.py          # 统一 UI 内的压力验证与电流-压力曲
 pressure_validation.py         # 压力帧、零点、证据与 CSV 配对
 extensions/gripper-pressure-f103/
   Core/ MDK-ARM/ *.ioc         # STM32F103 源码、CubeMX 与 Keil 工程
-  PC_UpperComputer/protocol.py # F103 协议及原厂曲线唯一数据源
-  PC_UpperComputer/gripper_monitor.py # 旧独立压力 GUI，保留供维护/比对
+  # 已移除第二个压力 GUI，厂家曲线由根目录 pressure_protocol.py 统一维护
   docs/ tests/                 # 压力扩展原始说明与单元测试
 legacy/                        # 过去 USB-CAN、F103-CAN 桥接实现，不被主程序使用
 tests/                         # 单元测试、伪串口和 Tk 虚拟界面测试
@@ -72,3 +71,15 @@ GitHub Actions 在 Linux + Xvfb 中运行两个测试集与 Python 语法检查�
 - [F103 压力固件与原厂曲线交接](extensions/gripper-pressure-f103/docs/PROJECT_HANDOFF_2026-10-30.md)
 - [HA8 V3.2 历史交接](doc/PROJECT_HANDOFF_2026-10-16.md)
 - [文档总索引](doc/README.md)
+
+
+## 标定一次，之后不使用压力片（实验性）
+
+在唯一上位机的「压力验证 / 曲线」内，先连接 HA8 与 F103，采压力零点，开始采集，进行**有限行程、低速且有限功率**的夹紧/张开测试，再结束采集并点「从本次数据生成并保存模型」。模型会保存在本机 `calibration/grip_force_model.json`，不提交 GitHub。以后可拆下 FSR，连接 HA8 舵机即可在**此前训练过的电流/角度范围、相同夹持结构的闭合运动阶段**显示“单指尖理论受力估计”。静止自锁、超范围、故障、未知工况会显示无法估算，**不参与舵机停机或安全控制**。
+
+夹口毫米间距：可以在压力实验页填写两组实际测量的 `舵机角度—两指开口mm`，仅在两点区间插值；没有实际测量不显示毫米值。蜗轮模数1、20齿，蜗杆模数1但头数未知，不能断言外部减速比为20:1；HA8官方输出轴额定力矩已包含内部378:1减速。
+
+- 压力协议/厂家表唯一源：[pressure_protocol.py](pressure_protocol.py)
+- 离线单指尖经验估计：[grip_force_calibration.py](grip_force_calibration.py)
+- [模型、机械边界与仓库清理交接](doc/ONE_TIME_FORCE_CALIBRATION_2026-10-30.md)
+- **旧** `extensions/gripper-pressure-f103/PC_UpperComputer/gripper_monitor.py` 已从当前树移除，需要时仅从 Git 历史恢复；日常只运行根目录 `HA8_UpperComputer.py`。
