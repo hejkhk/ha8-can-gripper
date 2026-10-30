@@ -140,7 +140,9 @@ class PressureEvidence:
         if self.zero_adc is None:
             return None
         # 158 kOhm is configured, not independently measured in-circuit.
-        return estimate_circuit_force_g(adc, self.rf_kohm, self.zero_adc)
+        value = estimate_circuit_force_g(adc, self.rf_kohm, self.zero_adc)
+        # The factory nominal rating is 1 kg; never plot the 2 kg reference as valid.
+        return value if value is not None and 0 <= value <= 1000 else None
 
     def sustained(self, now=None, seconds=0.9):
         """Optional persistence evidence; not proof of mechanical grip or zero slip."""
@@ -159,6 +161,8 @@ class PressureEvidence:
         now = time.monotonic() if now is None else now
         if self.zero_adc is None:
             return "未校零，无法判断压力接触", None
+        if self.latest(now) is None:
+            return "压力数据不足或已过期", None
         points = [s for s in self.samples if 0 <= now-s.at <= 0.6]
         if len(points) < 8 or now-points[-1].at > 0.3:
             return "压力数据不足或已过期", None
@@ -246,13 +250,13 @@ class CurveRecorder:
         lo, hi = min(x for x,y in pairs), max(x for x,y in pairs)
         if hi-lo < 0.03:
             return pairs, []
-        bins = max(3, min(40, bins))
+        bins = max(3, min(int(bins), max(3, len(pairs)//4)))
         groups = [[] for _ in range(bins)]
         for x,y in pairs:
             i = min(bins-1, int((x-lo)/(hi-lo)*bins))
             groups[i].append((x,y))
         return pairs, [(median(x for x,y in group), median(y for x,y in group))
-                       for group in groups if len(group) >= 3]
+                       for group in groups if len(group) >= 2]
 
     def export_csv(self, path):
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
