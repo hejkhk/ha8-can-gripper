@@ -178,6 +178,46 @@ class PressureLabGuiTests(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_one_degree_is_single_command_and_reclick_is_rejected(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from calibration_capture import CalibrationRun
+        from ha8_protocol import CMD_SET_MTURN_ANGLE_BY_VELOCITY
+        app=HA8UpperComputer()
+        app.withdraw()
+        panel=app.pressure_lab
+        try:
+            now=time.monotonic()
+            panel.link=SimpleNamespace(is_open=True,close=lambda:None)
+            panel.sensor.zero_adc=124.0
+            panel.sensor.zero_noise_adc=1.0
+            panel.sensor.add(frame(1,126),now)
+            panel.recorder.start("step-test")
+            panel.capture=CalibrationRun("step-test",124,app.servo_id())
+            panel.confirm_mechanism.set(True)
+            panel.last_ha8=(now,app.servo_id(),
+                            {"angle_deg":50.0,"current_ma":220,"status":0})
+            with patch.object(app.auto_grip_panel,"_preflight",return_value=app.servo_id()), \
+                 patch.object(app.auto_grip_panel,"_parameters",
+                              return_value=(0.0,100.0,5.0,1200,300)), \
+                 patch.object(app,"send_ha8") as write, \
+                 patch("pressure_lab_panel.messagebox.showwarning") as warn:
+                panel.step_one_degree()
+                self.assertEqual(write.call_count,1)
+                command=write.call_args.args[0]
+                self.assertEqual(command[2],CMD_SET_MTURN_ANGLE_BY_VELOCITY)
+                self.assertEqual(write.call_args.kwargs["owner"],"pressure_calibration")
+                self.assertTrue(panel.step_state.pending)
+                self.assertAlmostEqual(panel.step_state.target,49.0)
+                panel.step_one_degree()
+                self.assertEqual(write.call_count,1)
+                warn.assert_called_once()
+            panel.step_state.clear()
+            panel.recorder.stop()
+            panel.capture.stop()
+        finally:
+            app.destroy()
+
     def test_two_tabs_and_no_commands_on_pressure_page(self):
         app=HA8UpperComputer()
         app.withdraw()
