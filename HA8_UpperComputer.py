@@ -42,9 +42,10 @@ from ha8_protocol import (
 from ha8_serial import HA8SerialTransport
 from grip_panel import GripPanel
 from auto_grip_panel import AutoGripPanel
+from pressure_lab_panel import PressureLabPanel
 
 APP_TITLE = "HA8 智能夹爪上位机"
-APP_VERSION = "3.3-beta"
+APP_VERSION = "3.4-beta"
 
 
 class HA8UpperComputer(tk.Tk):
@@ -124,6 +125,7 @@ class HA8UpperComputer(tk.Tk):
         self.tab_monitor = ttk.Frame(self.nb, padding=10)
         self.tab_grip = ttk.Frame(self.nb, padding=10)
         self.tab_auto_grip = ttk.Frame(self.nb, padding=10)
+        self.tab_pressure = ttk.Frame(self.nb, padding=10)
         self.tab_maint = ttk.Frame(self.nb, padding=10)
         self.tab_scan = ttk.Frame(self.nb, padding=10)
         self.tab_config = ttk.Frame(self.nb, padding=10)
@@ -133,6 +135,7 @@ class HA8UpperComputer(tk.Tk):
 
         # All legacy tools remain available behind one deliberate opt-in.
         self.nb.add(self.tab_auto_grip, text="夹爪控制")
+        self.nb.add(self.tab_pressure, text="压力验证 / 曲线")
         self.advanced_tab_labels = [
             (self.tab_control, "手动位置"), (self.tab_monitor, "数据监控"),
             (self.tab_grip, "夹持分析"), (self.tab_maint, "停止 / 标定"),
@@ -149,6 +152,8 @@ class HA8UpperComputer(tk.Tk):
         self.grip_panel.pack(fill="both", expand=True)
         self.auto_grip_panel = AutoGripPanel(self.tab_auto_grip, self)
         self.auto_grip_panel.pack(fill="both", expand=True)
+        self.pressure_lab = PressureLabPanel(self.tab_pressure, self)
+        self.pressure_lab.pack(fill="both", expand=True)
         self._build_maint_tab()
         self._build_scan_tab()
         self._build_config_tab()
@@ -940,6 +945,11 @@ class HA8UpperComputer(tk.Tk):
                 kind, value = self.ui_queue.get_nowait()
                 if kind == "serial_data":
                     self._handle_serial_data(value)
+                elif kind == "pressure_frame":
+                    frame, arrived_at = value
+                    self.pressure_lab.on_pressure_frame(frame, arrived_at)
+                elif kind == "pressure_error":
+                    self.pressure_lab.on_pressure_error(value)
                 elif kind == "serial_stream":
                     direction, data = value
                     self._append_serial_text(f"{direction}  {hex_bytes(data)}")
@@ -1006,6 +1016,7 @@ class HA8UpperComputer(tk.Tk):
         if "voltage_mv" in f:
             grip_result=self.grip_panel.on_monitor(rsp.servo_id,f)
             self.auto_grip_panel.on_monitor(rsp.servo_id,f)
+            self.pressure_lab.on_ha8_monitor(rsp.servo_id,f)
             self.samples.append((
                 time.time(),rsp.servo_id,f["voltage_mv"],f["current_ma"],f["power_mw"],
                 f["temperature_adc"],f["status"],f["angle_deg"],f["turn"],
@@ -1081,6 +1092,7 @@ class HA8UpperComputer(tk.Tk):
         try:
             self.stop_scan()
             self.stop_monitor()
+            self.pressure_lab.shutdown()
             self.transport.close()
         finally:
             self.destroy()
