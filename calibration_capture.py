@@ -109,7 +109,13 @@ class CalibrationRun:
         root=Path(root)
         root.mkdir(parents=True,exist_ok=True)
         stem = datetime.fromtimestamp(self.start_unix).strftime("run_%Y%m%d_%H%M%S_%f")
+        # A previous partial export must never cause the collected in-memory
+        # session to become permanently un-exportable.
         folder=root/stem
+        suffix=1
+        while folder.exists():
+            folder=root/f"{stem}_retry{suffix}"
+            suffix+=1
         folder.mkdir(exist_ok=False)
         self._write_csv(folder/"01_pressure_f103.csv",
             ["pc_time_utc","pc_unix_ms","elapsed_s","trial","source","seq","f103_uptime_ms",
