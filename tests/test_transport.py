@@ -13,7 +13,7 @@ except ImportError:
     serial.PARITY_NONE='N'
     sys.modules['serial']=serial
 
-from usb_can_cdc import UsbCanCdc, build_standard_data_record, parse_standard_data_record
+from legacy.usb_can_cdc import UsbCanCdc, build_standard_data_record, parse_standard_data_record
 
 class TransportTests(unittest.TestCase):
     def test_roundtrip_fixed_record(self):
