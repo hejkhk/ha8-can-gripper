@@ -104,23 +104,28 @@ class PressureEvidence:
         self.zero_noise_adc = None
         self.samples = deque(maxlen=2000)
         self.last_received_at = None
+        self.last_bad_at = None
 
     def add(self, frame, at):
         self.last_received_at = at
         if frame.status == 0 and 0 <= frame.adc < 4085:
             self.samples.append(PressurePoint(at, frame.sequence, frame.adc, frame.voltage_mv,
                                                frame.status))
+        else:
+            self.last_bad_at = at
 
     def latest(self, now=None):
         now = time.monotonic() if now is None else now
         if self.samples and now - self.samples[-1].at <= 0.3:
-            return self.samples[-1]
+            if self.last_bad_at is None or self.samples[-1].at > self.last_bad_at:
+                return self.samples[-1]
         return None
 
     def capture_zero(self, now=None):
         now = time.monotonic() if now is None else now
         points = [s for s in self.samples if now - 1.5 <= s.at <= now]
-        if len(points) < 30 or points[-1].at - points[0].at < 0.7 or now-points[-1].at > 0.2:
+        if (len(points) < 30 or points[-1].at - points[0].at < 0.7
+                or self.latest(now) is None):
             raise ValueError("先让压力片完全无载、连续稳定采集至少 1 秒")
         data = [x.adc for x in points]
         base = median(data)
@@ -191,7 +196,9 @@ class CurveRecorder:
         self.active = False
 
     def add(self, at, sid, fields, pressure: PressureEvidence, phase):
-        if not self.active:
+        if not self.active or len(self.rows) >= 30000:
+            if len(self.rows) >= 30000:
+                self.active = False
             return False
         point = pressure.latest(at)
         if point is None or pressure.zero_adc is None:
