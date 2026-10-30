@@ -1,0 +1,10 @@
+# Per-user application and local build outputs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+PC_UpperComputer/calibration.json
+PC_UpperComputer/*.csv
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+MDK-ARM/*.uvoptx
+MDK-ARM/*.uvguix*
