@@ -626,6 +626,9 @@ class HA8UpperComputer(tk.Tk):
             self.log(f"ERROR 连接失败：{exc}")
 
     def disconnect(self):
+        lab=getattr(self,"pressure_lab",None)
+        if lab is not None and lab.recorder.active:
+            lab.stop_record()  # Save the synchronized run before the HA8 source disappears.
         self.stop_scan()
         self.stop_monitor()
         self.transport.close()
