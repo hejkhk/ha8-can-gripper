@@ -68,3 +68,11 @@ python HA8_UpperComputer.py
 ## 接手指南
 
 新开发者请先阅读 **[完整项目交接文档（V3.2-beta，2026-10-16）](doc/PROJECT_HANDOFF_2026-10-16.md)**，其中说明当前 USB 串口方案、夹持/自动抓取源码结构、默认阈值、软件急停限制、未验证项目和实机验收顺序。
+
+
+## 独立扩展：STM32F103 薄膜压力监测（V3）
+
+- [压力监测项目入口](extensions/gripper-pressure-f103/README.md)
+- [压力监测完整交接（2026-10-30）](extensions/gripper-pressure-f103/docs/PROJECT_HANDOFF_2026-10-30.md)
+
+`IMS003-C10A-1KG + AO 转换模块 + STM32F103 + USB-TTL + Tkinter` 实现实时受力趋势、ADC/电压、理论克力/N、曲线和 CSV。V3 软件按 **Rf=158kΩ** 估算；实际电阻与测力精度仍需实物核对。**该扩展与 HA8 舵机控制串口独立，暂未整合进 HA8 主控制界面，也不能作为硬件安全停机。**

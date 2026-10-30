@@ -1,55 +1,72 @@
-# Gripper pressure sensor monitor (STM32F103C8T6 + PC, v2)
+# 夹爪薄膜压力监测扩展 | STM32F103C8T6 + Windows（V3）
 
-Independent pressure-monitoring extension for the HA8 gripper repository. **This is a monitor, not the HA8 motor controller.** It does not implement grip-force closed-loop control or emergency stop.
+> **交接入口：**[完整项目交接文档（2026-10-30）](docs/PROJECT_HANDOFF_2026-10-30.md)  
+> **状态：**ADC/USB-TTL/上位机压力变化链路已有用户实物观察；158kΩ 理论受力**尚未**完成标准法向力验证。
 
-## Hardware
-- IMS003-C10A-1KG FSR and **separate 5 V AO conversion module**.
-- Module AO -> STM32F103C8T6 PA1 (ADC1_IN1); module GND -> STM32 GND.
-- MCU PA9 (TX) -> USB-TTL RXD; MCU PA10 (RX) -> USB-TTL TXD; common GND. UART: 115200, 8N1.
-- Verify AO stays within 0–3.3 V before connecting PA1. Use 3.3 V TTL signal levels for the serial adapter.
-- Do **not** use the FSR's resistance-force curve as an uncalibrated voltage-force curve: the AO board's transfer function/trim is not specified.
+## 1. 项目定位
 
-## Firmware
-The supplied `Gripper_Pressure_F103.ioc` is the authoritative STM32CubeMX configuration. MCU source code is under `Core/`, Keil project metadata is under `MDK-ARM/`. Vendor files (`Drivers/` HAL/CMSIS) are intentionally **not vendored** into the GitHub repository. Open the `.ioc` in STM32CubeMX with the STM32CubeF1 firmware package installed and regenerate source/support files; then build with Keil MDK-ARM. Back up any edited files before regenerating and preserve `USER CODE` blocks.
+本项目是 `hejkhk/ha8-can-gripper` 中的**独立压力监测模块**，不直接控制 HA8 舵机、不执行压力闭环、不具备安全停机功能。原 HA8 上位机依旧通过**官方 USB 串口板**控制舵机；本模块通过单独 F103/USB-TTL 串口监测薄膜受力。
 
-The current firmware samples PA1 with an ADC calibration sequence, averages 16 readings, uses integer EMA smoothing, and emits ASCII frames about every 10 ms:
-`P,seq,mcu_ms,adc,mv,flags\r\n`.
-
-## Windows upper computer
+```text
+IMS003-C10A-1KG (FSR)
+       ↓ 两线
+5V 线性电压转换模块 (AO)
+       ↓ PA1 / ADC1_IN1
+STM32F103C8T6 (16次平均 + EMA + 10ms/帧)
+       ↓ PA9 USART1_TX → USB-TTL RXD, 共地，115200 8N1
+Windows PC：Python/Tkinter 上位机
 ```
-cd PC_UpperComputer
-py -3 -m pip install -r requirements.txt
-py -3 gripper_monitor.py
+
+**连接前务必先用万用表确认 AO 不超过 F103 允许的 ADC 输入电压；USB-TTL 信号使用 3.3V TTL，高低电平与主控兼容。** 当前 DO 未接。
+
+## 2. Windows 快速开始（现有 MCU 固件无需更新）
+
+```powershell
+git clone https://github.com/hejkhk/ha8-can-gripper.git
+cd ha8-can-gripper\extensions\gripper-pressure-f103
+py -3 -m pip install -r PC_UpperComputer\requirements.txt
+py -3 PC_UpperComputer\gripper_monitor.py
 ```
-Connect the serial device, confirm raw ADC and voltage change with a load, then choose:
-- **Factory curve (quick estimate):** 0g zero and one known-force reference. Uses the manufacturer's *conductance-versus-force* table by interpolation, assuming the AO module maps conductance approximately linearly over the used span. This needs verification.
-- **Measured multi-point:** collect several real loads for a higher-confidence calibration under the actual grip geometry.
 
-Never infer known force merely from an object's weight clamped between two fingers. The current sensor datasheet states **1 kg nominal range** but contains a **2 kg reference data point**; 1–2 kg accuracy, durability, and safe use require independent validation. Pressure/force values are estimates and should not be used as the sole safety interlock.
+1. 在 GUI 中选择实际 USB-TTL COM 端口并连接，查看 ADC / mV / 实时曲线；先确认按压会使电压增加。
+2. 选择 **“免砝码 · 电路”**，确认 `AO-RES 实际电阻 Rf` 输入是 **158**（单位 kΩ）。
+3. **完全卸载压力**并保持稳定至少 1s，再点击“无负载采集零点”。
+4. 点击“保存当前标定/模式”；以后会从本地 `calibration.json` 恢复。**旧配置会覆盖软件默认 158**，如有旧值需手动更新并重新保存。
+5. 实时显示**理论估算**克力/N、60s 曲线、峰值并可导出 CSV。
 
-Run `py -3 -m unittest discover -s tests -v` from this directory for algorithm and protocol tests.
+## 3. 受力换算与精度限制
 
-## Relationship with existing HA8
-This folder is standalone and **does not modify** `HA8_UpperComputer.py`, `ha8_protocol.py` or `ha8_serial.py`. The sensor uses its own STM32 / USB-TTL serial link; the existing HA8 actuator uses its official USB-to-UART adapter. Integrating readings into the HA8 controller is a separate step.
+- 转换模块手册公式：`Uo = 0.1 * (1 + Rf/Rx)`，`G = (Uo - Uzero) / (0.1 * Rf)`；根据传感器厂家第 2 页的 **电导—受力表**作分段插值。
+- V3 默认 `Rf=158kΩ` 是按当前使用要求配置的**假定反馈阻值**，**并非已实测证实**；应断电按手册测 R2 未焊焊盘核对真实反馈阻值。
+- 厂家首页标称测力量程 1kg、最小测力约 50g；虽然第二页有 2kg 参考点，但超出标称部分无精度/寿命保证。
+- 理论在 Rf=158kΩ 时，2kg 对应 AO≈3.26V，已非常接近标称 3.3V 上限，实际可能提前饱和。只采零点能校正偏置，**不能替代精度验收**。
+- 软件提供 **免砝码电路 / 单点参考 / 多点实测** 三种模式；无需砝码时只能称“估计”，不是“精准夹持力”。
 
-## Status (2026-10-30)
-User-confirmed: COM4 receiving ~100 frames/s and observed voltage rises on pressure. Factory-mode force precision not yet bench-characterized.
+详细公式：[AO 电路模型](docs/ao_converter_v3.md)；完整状态与接手指南：[项目交接文档](docs/PROJECT_HANDOFF_2026-10-30.md)。
 
+## 4. 主要文件
 
-## V3: no-weight circuit estimate (2026-10-30)
+| 文件 | 功能 |
+|---|---|
+| `Core/Src/main.c` | ADC1 PA1、上电校准、16次采样平均、EMA、USART1 每约 10ms 发一帧 |
+| `Gripper_Pressure_F103.ioc` | CubeMX 外设和采样时间 239.5 周期 |
+| `MDK-ARM/Gripper_Pressure_F103.uvprojx` | Keil MDK 工程配置 |
+| `PC_UpperComputer/gripper_monitor.py` | Windows GUI、串口、图表、峰值、零点和 CSV |
+| `PC_UpperComputer/protocol.py` | 串口帧解析、转换模块计算、厂家曲线插值 |
+| `tests/test_protocol.py` | 公式、边界条件、帧和插值的单元测试 |
+| `docs/PROJECT_HANDOFF_2026-10-30.md` | **维护/交接所需的完整项目现状** |
 
-The PC monitor adds **免砝码 · 电路** mode based on the AO converter manual:
-\`Uo = 0.1 * (1 + Rf/Rx)\`, using the measured AO-RES feedback resistance \`Rf\` and the IMS003-C10A manufacturer's conductance/force table. A no-load offset capture is recommended. No reference mass is required **for theoretical estimation**; precision is not guaranteed.
+串口协议：`P,seq,mcu_ms,adc,mv,flags\r\n`，115200/8N1；flags：1 ADC失败、2 ADC接近上限、4 上电校准失败。
 
-**Power off all modules before measuring the empty R2 solder pads with an ohmmeter.** The module manual says this gives the current AO-RES feedback resistance; enter the measured value in kΩ. 300kΩ is a supplier *recommendation* for IMS-C10A small-range sensors, not necessarily the installed trim setting. Adjusting AO-RES changes the hardware and requires a new measurement.
+## 5. 开发与测试
 
-At 300kΩ the 2kg datasheet resistance (5kΩ) would require 6.1V, which the module cannot output. Around 150kΩ gives approximately 3.1V at 2kg on paper, but **the sensor is nominally rated 1kg** and the upper range is unverified.
+在模块目录运行：
 
-Run the updated PC program using \`py -3 gripper_monitor.py\`. Firmware and UART remain unchanged. See the separate note at \`docs/ao_converter_v3.md\`.
+```powershell
+py -3 -m py_compile PC_UpperComputer\protocol.py PC_UpperComputer\gripper_monitor.py tests\test_protocol.py
+py -3 -m unittest discover -s tests -v
+```
 
-## V3 preset for current setup: Rf = 158 kΩ
+重新生成或编译 STM32 时，请先安装 STM32CubeF1 HAL/CMSIS 驱动依赖（GitHub 不包含 `Drivers/`）并备份代码，防止重新生成覆盖 USER CODE；详见交接文档。
 
-- For this user's AO-RES configuration, the PC monitor now starts with **158 kΩ** in the resistor field. This is an **assumed/set value** and must match the actual module; any previously saved `PC_UpperComputer/calibration.json` value takes precedence until the user updates it and clicks Save.
-- Ideal AO voltages for 0 / 50 / 100 / 200 / 500 / 1000 / 2000 gf: 0.100 / 0.19875 / 0.27556 / 0.42245 / 0.97778 / 1.71224 / 3.260 V.
-- When the no-load baseline has been captured, the program subtracts that recorded baseline instead of the ideal 0.100 V. Apply real load with stable contact area and geometry.
-- At 2 kg the ideal value is 3.26 V, only 40 mV below the claimed 3.3 V maximum; treat high readings as potentially saturated and note that nominal force range in the sensor datasheet is 1 kg.
+**重要：**此压力估算没有经过已知法向受力标定，不能充当安全相关的夹爪停止/防夹保护，也不能用物体质量直接等同于实际夹持力。
