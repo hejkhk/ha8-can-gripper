@@ -13,6 +13,26 @@ def number(x):
     except (TypeError,ValueError): return None
     return v if math.isfinite(v) else None
 
+def observed_closing_motion(previous, servo_id, now, angle_deg):
+    """Detect actual closing from consecutive HA8 feedback of the *same* servo.
+
+    previous: (servo_id, monotonic_time, angle_deg). A static motor state,
+    reversed motion or readings from different servos are not training data.
+    """
+    if previous is None:
+        return False
+    try:
+        prev_id, prev_time, prev_angle = previous
+    except (TypeError, ValueError):
+        return False
+    t, a, old_t, old_a = number(now), number(angle_deg), number(prev_time), number(prev_angle)
+    if (prev_id != servo_id or t is None or a is None
+            or old_t is None or old_a is None):
+        return False
+    dt = t - old_t
+    return 0.03 <= dt <= 1.0 and old_a - a >= max(0.15, 0.8 * dt)
+
+
 class ForceMap:
     def __init__(self,points,gap_points=None):
         if not isinstance(points,list) or not 18<=len(points)<=30000:
