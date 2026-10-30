@@ -46,7 +46,7 @@ from pressure_lab_panel import PressureLabPanel
 from serial_device_discovery import discover_ports, unique_selection
 
 APP_TITLE = "HA8 智能夹爪上位机"
-APP_VERSION = "3.4-beta"
+APP_VERSION = "3.5-beta"
 
 
 class HA8UpperComputer(tk.Tk):
