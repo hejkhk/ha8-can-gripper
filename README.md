@@ -83,3 +83,7 @@ GitHub Actions 在 Linux + Xvfb 中运行两个测试集与 Python 语法检查�
 - 离线单指尖经验估计：[grip_force_calibration.py](grip_force_calibration.py)
 - [模型、机械边界与仓库清理交接](doc/ONE_TIME_FORCE_CALIBRATION_2026-10-30.md)
 - **旧** `extensions/gripper-pressure-f103/PC_UpperComputer/gripper_monitor.py` 已从当前树移除，需要时仅从 Git 历史恢复；日常只运行根目录 `HA8_UpperComputer.py`。
+
+### V3.6 无载零点必须先采集（本次修复）
+
+在“压力验证 / 曲线”页，**先松开夹爪、确认 FSR 完全无载且已有至少 1 秒稳定数据，点击“① 无载归零”**；显示零点 ADC 与噪声后，“② 开始标定采集”才会在 HA8 实时监控、压力实时数据有效、压力回到零点附近时启用。采集过程中零点锁定，禁止重置；断线重连必须重新归零。若已有未导出的上一轮数据，重新归零前会确认并在归零成功后清空旧采样，避免混合不同零点。只记录压力变化趋势和厂商曲线的理论力值；**零点无法修正个体传感器精度/增益误差**。不要在加载状态下按归零按钮。

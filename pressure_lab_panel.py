@@ -33,7 +33,7 @@ class PressureLabPanel(ttk.Frame):
         self.connection_text = tk.StringVar(value="未连接压力模块")
         self.adc_text = tk.StringVar(value="— ADC")
         self.pressure_text = tk.StringVar(value="—")
-        self.zero_text = tk.StringVar(value="尚未采集无载零点")
+        self.zero_text = tk.StringVar(value="⚠ 尚未归零：请让压力片完全无载，再点击归零")
         self.evidence_text = tk.StringVar(value="待机：传感器仅用于实验验证，不影响抓取控制")
         self.points_text = tk.StringVar(value="尚未开始采集")
         self.unit = tk.StringVar(value="adc")
@@ -43,6 +43,7 @@ class PressureLabPanel(ttk.Frame):
         self._job = None
         self._build()
         self.refresh_ports()
+        self._update_zero_controls()
         self._job = self.after(350, self._tick)
 
     def _build(self):
@@ -58,7 +59,7 @@ class PressureLabPanel(ttk.Frame):
         self.conn_btn.pack(side="left", padx=12)
         ttk.Label(top, textvariable=self.connection_text).pack(side="left")
 
-        readouts = ttk.LabelFrame(area, text="② 先采无载零点，再查看接触证据", padding=10)
+        readouts = ttk.LabelFrame(area, text="② 必做：压力片无载归零（每次连接后重新采集）", padding=10)
         readouts.pack(fill="x", pady=(0, 8))
         first = ttk.Frame(readouts)
         first.pack(fill="x")
@@ -68,7 +69,8 @@ class PressureLabPanel(ttk.Frame):
         ttk.Label(first, textvariable=self.pressure_text, font=("Consolas", 13, "bold")).pack(side="left")
         row = ttk.Frame(readouts)
         row.pack(fill="x", pady=6)
-        ttk.Button(row, text="无负载采集零点", command=self.capture_zero).pack(side="left")
+        self.zero_btn = ttk.Button(row, text="① 无载归零（采最近1秒）", command=self.capture_zero)
+        self.zero_btn.pack(side="left")
         ttk.Button(row, text="检查当前压力接触", command=self.check_contact).pack(side="left", padx=8)
         ttk.Label(row, textvariable=self.zero_text).pack(side="left", padx=10)
         ttk.Label(readouts, textvariable=self.evidence_text,
@@ -80,7 +82,7 @@ class PressureLabPanel(ttk.Frame):
         controls.pack(fill="x")
         ttk.Label(controls, text="实验名称").pack(side="left")
         ttk.Entry(controls, textvariable=self.trial, width=16).pack(side="left", padx=(5, 12))
-        self.start_btn = ttk.Button(controls, text="开始采集", command=self.start_record)
+        self.start_btn = ttk.Button(controls, text="② 开始标定采集（先归零）", command=self.start_record)
         self.start_btn.pack(side="left", padx=4)
         self.stop_btn = ttk.Button(controls, text="结束采集", command=self.stop_record)
         self.stop_btn.pack(side="left", padx=4)
@@ -156,19 +158,25 @@ class PressureLabPanel(ttk.Frame):
         self.pressure_port.set(port)
         self.sensor = PressureEvidence(rf_kohm=158)
         self.recorder.stop()
-        self.connection_text.set(f"已连接 {port}，等待数据")
+        self._previous_ha8 = None
+        self.zero_text.set("⚠ 新连接：尚未归零；确认夹爪松开且压力片无载")
+        self.connection_text.set(f"已连接 {port}，等待无载数据")
         self.conn_btn.configure(text="断开压力模块")
-        self.evidence_text.set("请确认压力片无载，再采集零点")
+        self.evidence_text.set("必须先无载归零，才能开始本次标定；断线重连后旧零点无效")
+        self._update_zero_controls()
 
     def disconnect(self):
         self._previous_ha8 = None
         self.recorder.stop()
         self.link.close()
+        self.sensor = PressureEvidence(rf_kohm=158)
+        self.zero_text.set("⚠ 压力连接已断开；下次连接后必须重新无载归零")
         self.connection_text.set("未连接压力模块")
         self.conn_btn.configure(text="连接压力模块")
         self.adc_text.set("— ADC")
         self.pressure_text.set("—")
-        self.evidence_text.set("压力模块已断开；夹爪运动控制不受影响")
+        self.evidence_text.set("压力模块已断开；本次标定已停止，重新连接后需归零")
+        self._update_zero_controls()
 
     def _thread_frame(self, frame, at):
         self.app.ui_queue.put(("pressure_frame", (frame, at)))
@@ -199,12 +207,32 @@ class PressureLabPanel(ttk.Frame):
         self.evidence_text.set(f"压力采集已停止：{reason}")
 
     def capture_zero(self):
+        # A zero captured after the trial begins would silently relabel its
+        # samples. Never combine rows with different zero baselines.
+        if self.recorder.active:
+            messagebox.showwarning("不能重新归零", "请先结束本次标定采集；运行中禁止更改零点")
+            return
+        if not self.link.is_open:
+            messagebox.showwarning("压力未连接", "请先连接 STM32F103 压力模块")
+            return
+        if self.recorder.rows and not messagebox.askyesno(
+                "重新归零将清空旧实验",
+                "当前还有上一轮实验数据。重新归零将清空未导出的数据，建议先导出 CSV。是否继续？"):
+            return
         try:
             zero = self.sensor.capture_zero()
-            self.zero_text.set(f"零点 ADC {zero:.1f}（Rf=158kΩ，未经实测）")
-            self.evidence_text.set("零点采集成功；后续接触证据仅用于验证实验")
         except ValueError as exc:
             messagebox.showwarning("无法采零点", str(exc))
+            return
+        # Zero accepted; discard all samples from the previous zero.
+        if self.recorder.rows:
+            self.recorder.rows.clear()
+            self.points_text.set("零点已更新；上一轮采样已清空")
+            self._draw()
+        self.zero_text.set(
+            f"✓ 已无载归零：ADC {zero:.1f}，噪声≈{self.sensor.zero_noise_adc:.1f} ADC")
+        self.evidence_text.set("零点已采集；保持无载稳定，再开始标定采集")
+        self._update_zero_controls()
 
     def check_contact(self):
         if not self.link.is_open:
@@ -257,8 +285,15 @@ class PressureLabPanel(ttk.Frame):
         self.evidence_text.set(f"HA8：{reason}；FSR：{label}{tail}")
 
     def start_record(self):
-        if not self.link.is_open or self.sensor.zero_adc is None:
-            messagebox.showwarning("无法采集", "请先连接压力模块并采集无载零点")
+        if self.recorder.active:
+            return
+        if not self.link.is_open:
+            messagebox.showwarning("无法采集", "请先连接 STM32F103 压力模块")
+            return
+        ok, reason = self.sensor.ready_for_trial()
+        if not ok:
+            messagebox.showwarning("请先完成无载归零", reason)
+            self.evidence_text.set(reason)
             return
         if not self.app.transport.is_open or not self.app.monitor_running:
             messagebox.showwarning("无法采集", "请先连接 HA8 舵机，让主界面获取实时电流")
@@ -268,11 +303,13 @@ class PressureLabPanel(ttk.Frame):
             return
         self.recorder.start(self.trial.get())
         self.points_text.set("采集中：请通过夹爪控制页做低速试验")
-        self.evidence_text.set("采集启动；现有 HA8 控制逻辑完全不变")
+        self.evidence_text.set("本轮已锁定无载零点；采集进行中不允许重新归零")
+        self._update_zero_controls()
 
     def stop_record(self):
         self.recorder.stop()
         self.points_text.set(f"已停止：配对 {len(self.recorder.rows)} 个样本")
+        self._update_zero_controls()
         self._draw()
 
     def _load_model(self):
@@ -365,7 +402,18 @@ class PressureLabPanel(ttk.Frame):
                 px,py=xp(x),yp(y)
                 canvas.create_oval(px-3,py-3,px+3,py+3,fill="#bb4f27",outline="")
 
+    def _update_zero_controls(self):
+        if not hasattr(self, "start_btn"):
+            return
+        self.zero_btn.configure(state="normal" if self.link.is_open and not self.recorder.active
+                                else "disabled")
+        ready, _ = self.sensor.ready_for_trial()
+        can_start = (self.link.is_open and ready and self.app.transport.is_open
+                     and self.app.monitor_running and not self.recorder.active)
+        self.start_btn.configure(state="normal" if can_start else "disabled")
+
     def _tick(self):
+        self._update_zero_controls()
         if not self.link.is_open or self.sensor.latest() is None:
             self.adc_text.set("— ADC")
             self.pressure_text.set("—")

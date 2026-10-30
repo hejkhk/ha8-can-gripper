@@ -36,6 +36,25 @@ class PressureIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(fill_zero(s), 110.0, delta=1)
         self.assertIsNotNone(s.zero_noise_adc)
 
+    def test_zero_must_be_fresh_unloaded_before_trial(self):
+        s = PressureEvidence()
+        ok, message = s.ready_for_trial(10.0)
+        self.assertFalse(ok)
+        self.assertIn("零点", message)
+        fill_zero(s, now=10.0, baseline=125)
+        self.assertTrue(s.ready_for_trial(10.0)[0])
+        self.assertFalse(s.ready_for_trial(12.0)[0])  # stale stream
+        for i in range(35):
+            s.add(frame(200+i, 200), 10.1 + 0.01*i)
+        ok, message = s.ready_for_trial(10.44)
+        self.assertFalse(ok)
+        self.assertIn("零点附近", message)
+        for i in range(35):
+            s.add(frame(300+i, 126), 10.5 + 0.01*i)
+        self.assertTrue(s.ready_for_trial(10.84)[0])
+        s.add(frame(400, 126, 1), 10.85)
+        self.assertFalse(s.ready_for_trial(10.86)[0])
+
     def test_contact_is_evidence_only(self):
         s=PressureEvidence()
         fill_zero(s)
@@ -132,6 +151,33 @@ class PressureIntegrationTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name=="nt" or os.environ.get("DISPLAY"),"Tk display required")
 class PressureLabGuiTests(unittest.TestCase):
+    def test_zero_locked_during_recording_and_cleared_after_disconnect(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from pressure_validation import PressureEvidence
+        app = HA8UpperComputer()
+        app.withdraw()
+        try:
+            panel = app.pressure_lab
+            self.assertIsNone(panel.sensor.zero_adc)
+            panel.link = SimpleNamespace(is_open=True, close=lambda: None)
+            now = time.monotonic()
+            for i in range(110):
+                panel.sensor.add(frame(i, 124 + i%3-1), now-1.1+i*0.01)
+            panel.capture_zero()
+            previous = panel.sensor.zero_adc
+            self.assertIsNotNone(previous)
+            panel.recorder.start("测试")
+            with patch("pressure_lab_panel.messagebox.showwarning") as warn:
+                panel.capture_zero()
+                warn.assert_called_once()
+            self.assertEqual(panel.sensor.zero_adc, previous)
+            panel.disconnect()
+            self.assertIsNone(panel.sensor.zero_adc)
+            self.assertIn("重新", panel.zero_text.get())
+        finally:
+            app.destroy()
+
     def test_two_tabs_and_no_commands_on_pressure_page(self):
         app=HA8UpperComputer()
         app.withdraw()

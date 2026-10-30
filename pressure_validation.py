@@ -122,6 +122,26 @@ class PressureEvidence:
         self.zero_noise_adc = max(1.0, 1.4826 * mad)
         return self.zero_adc
 
+    def ready_for_trial(self, now=None):
+        """Check that a fresh, valid, unloaded zero is ready for a NEW trial.
+
+        This does not prove there is no physical load: the operator must make
+        sure the sensor is free before capturing the zero.
+        """
+        now = time.monotonic() if now is None else now
+        if self.zero_adc is None or self.zero_noise_adc is None:
+            return False, "请先在压力片完全无载时采集零点"
+        if self.latest(now) is None:
+            return False, "压力数据失效/超时，请确认连接与状态后重新归零"
+        recent = [p.adc for p in self.samples if 0 <= now - p.at <= 0.30]
+        if len(recent) < 8:
+            return False, "无载数据不足，请静置片刻再开始标定"
+        offset = median(recent) - self.zero_adc
+        threshold = max(15.0, 5.0 * self.zero_noise_adc)
+        if abs(offset) > threshold:
+            return False, "压力片当前不在零点附近：请松开夹爪，待读数恢复后再开始"
+        return True, "无载零点及实时数据有效"
+
     def theoretical_force_g(self, adc):
         if self.zero_adc is None:
             return None
