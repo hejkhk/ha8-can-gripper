@@ -19,6 +19,7 @@ from protocol import (PressureFrame, estimate_force_g, estimate_factory_force_g,
                       feedback_resistor_valid, estimate_circuit_force_g)
 
 BAUD = 115200
+DEFAULT_RF_KOHM = 158.0  # 本项目采用的 AO-RES 阻值，单位 kΩ；需要与实际硬件一致
 CAL_FILE = Path(__file__).with_name("calibration.json")
 DATA_FLAGS = {1: "ADC采集失败", 2: "ADC高端接近饱和", 4: "ADC上电校准失败"}
 
@@ -58,9 +59,9 @@ class GripperMonitor:
         self.status_text = tk.StringVar(value="未连接")
         self.point_g = tk.StringVar(value="0")
         self.reference_input_g = tk.StringVar(value="500")
-        self.rf_kohm_text = tk.StringVar(value="")
+        self.rf_kohm_text = tk.StringVar(value=f"{DEFAULT_RF_KOHM:g}")
         self.factory_state_text = tk.StringVar(value="尚未采集零点 / 参考载荷")
-        self.method_text = tk.StringVar(value="运放电路换算 · 估算（待填 Rf）")
+        self.method_text = tk.StringVar(value="运放电路换算 · 估算 (Rf=158kΩ)")
         self.mark_time = time.monotonic()
         self.mark_count = 0
         self._closing = False
@@ -156,10 +157,10 @@ class GripperMonitor:
         self.rf_kohm_text.trace_add("write", self._on_rf_changed)
         ttk.Button(circuit, text="① 无负载采集零点（推荐）",
                    command=self.capture_circuit_zero).pack(fill="x", pady=4)
-        self.circuit_state_text = tk.StringVar(value="未输入 Rf；无法显示绝对受力")
+        self.circuit_state_text = tk.StringVar(value="默认 Rf=158kΩ；请核实实际硬件电阻")
         ttk.Label(circuit, textvariable=self.circuit_state_text, wraplength=305,
                   foreground="#1863ac", justify="left").pack(anchor="w", pady=4)
-        ttk.Label(circuit, text="参考手册 IMS-C10A 小量程建议 300kΩ，但不能直接认定当前板子就是 300kΩ。",
+        ttk.Label(circuit, text="当前按 Rf=158kΩ 进行理论估算；300kΩ 是厂家建议值，并非本模块实际设置。",
                   foreground="#666", wraplength=305, justify="left").pack(anchor="w", pady=3)
         ttk.Label(circuit, text="断电后万用表测未焊 R2 两端阻值。若希望测到 2kg，理论上 Rf 需约≤160kΩ，且超出传感器标称 1kg。",
                   foreground="#985500", wraplength=305, justify="left").pack(anchor="w", pady=3)
@@ -544,6 +545,7 @@ class GripperMonitor:
     def _load_calibration(self):
         if not CAL_FILE.exists():
             self._update_factory_state()
+            self._on_rf_changed()
             return
         try:
             data = json.loads(CAL_FILE.read_text(encoding="utf-8"))
