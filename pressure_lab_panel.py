@@ -38,6 +38,8 @@ class PressureLabPanel(ttk.Frame):
         self.points_text = tk.StringVar(value="尚未开始采集")
         self.unit = tk.StringVar(value="adc")
         self.trial = tk.StringVar(value="试验1")
+        self.manual_closing = tk.BooleanVar(value=False)
+        self._previous_ha8 = None
         self._job = None
         self._build()
         self.refresh_ports()
@@ -84,6 +86,8 @@ class PressureLabPanel(ttk.Frame):
         self.stop_btn.pack(side="left", padx=4)
         ttk.Button(controls, text="导出 CSV", command=self.export_csv).pack(side="left", padx=5)
         ttk.Label(controls, textvariable=self.points_text).pack(side="left", padx=8)
+        ttk.Checkbutton(experiment, text="手动位置小步闭合也作为训练样本（仅标记；不发电机指令）",
+                        variable=self.manual_closing).pack(anchor="w")
         model_box = ttk.LabelFrame(experiment, text="④ 采集一次 → 保存离线估算模型（仅实验）", padding=6)
         model_box.pack(fill="x", pady=4)
         buttons = ttk.Frame(model_box)
@@ -157,6 +161,7 @@ class PressureLabPanel(ttk.Frame):
         self.evidence_text.set("请确认压力片无载，再采集零点")
 
     def disconnect(self):
+        self._previous_ha8 = None
         self.recorder.stop()
         self.link.close()
         self.connection_text.set("未连接压力模块")
@@ -210,10 +215,21 @@ class PressureLabPanel(ttk.Frame):
         self.evidence_text.set(label+suffix)
 
     def on_ha8_monitor(self, servo_id, fields):
+        now = time.monotonic()
+        angle = float(fields["angle_deg"])
+        previous = self._previous_ha8
+        self._previous_ha8 = (now, angle)
+        closing_motion = False
+        if previous is not None:
+            dt = now - previous[0]
+            closing_motion = (0.03 <= dt <= 1.0 and
+                              previous[1] - angle >= max(0.15, 0.8 * dt))
         phase = self.app.auto_grip_panel.phase or "idle"
+        if self.manual_closing.get() and phase == "idle" and closing_motion:
+            phase = "gripping"
         if self.model is not None:
             force = self.model.predict(float(fields["current_ma"])/1000,
-                                       float(fields["angle_deg"]), phase, int(fields["status"]))
+                                       angle, phase if closing_motion else "idle", int(fields["status"]))
             gap = self.model.gap_mm(float(fields["angle_deg"]))
             if force is None:
                 text = "离线估算：静止/未覆盖的工况，无法估计"
@@ -224,7 +240,7 @@ class PressureLabPanel(ttk.Frame):
             if hasattr(self.app.auto_grip_panel, "model_force_text"):
                 self.app.auto_grip_panel.model_force_text.set(text)
 
-        if self.recorder.add(time.monotonic(), servo_id, fields, self.sensor, phase):
+        if self.recorder.add(now, servo_id, fields, self.sensor, phase):
             if len(self.recorder.rows) % 10 == 0:
                 self.points_text.set(f"已配对 {len(self.recorder.rows)} 点")
 
