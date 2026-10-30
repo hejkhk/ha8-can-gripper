@@ -142,6 +142,18 @@ class PressureEvidence:
         # 158 kOhm is configured, not independently measured in-circuit.
         return estimate_circuit_force_g(adc, self.rf_kohm, self.zero_adc)
 
+    def sustained(self, now=None, seconds=0.9):
+        """Optional persistence evidence; not proof of mechanical grip or zero slip."""
+        now = time.monotonic() if now is None else now
+        if self.zero_adc is None or self.latest(now) is None:
+            return False
+        points = [x for x in self.samples if 0 <= now-x.at <= seconds]
+        if len(points) < 20 or points[-1].at - points[0].at < 0.7:
+            return False
+        threshold = max(20.0, 6.0*self.zero_noise_adc)
+        passed = sum(x.adc-self.zero_adc >= threshold for x in points)
+        return passed >= math.ceil(0.85*len(points))
+
     def evidence(self, now=None):
         """Return (label, measured_delta_adc). No path returns 'grip proven'."""
         now = time.monotonic() if now is None else now
@@ -154,6 +166,8 @@ class PressureEvidence:
         delta = median(x.adc for x in recent)-self.zero_adc
         threshold = max(20.0, 6.0*self.zero_noise_adc)
         if delta >= threshold:
+            if self.sustained(now):
+                return "持续受压证据（仍未验证是否打滑）", delta
             return "检测到压力接触证据（不代表可靠抓稳）", delta
         return "未检测到足够的压力接触证据", delta
 
