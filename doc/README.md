@@ -2,6 +2,8 @@
 
 ## 当前使用（2026-10-30）
 
+- [V3.7 手动逐度标定与完整分路 CSV 自动导出](MANUAL_STEP_CSV_CALIBRATION_2026-10-30.md)
+
 - [统一 HA8 + 压力 UI、自动识别 COM、仓库结构](UNIFIED_APP_AND_COM_DISCOVERY_2026-10-30.md)
 - [贴片压力验证与舵机电流—压力曲线](PRESSURE_HA8_INTEGRATION_2026-10-30.md)
 - [官方 HA8 USB 串口连接](direct_usb_serial_mode.md)
