@@ -34,3 +34,15 @@ This folder is standalone and **does not modify** `HA8_UpperComputer.py`, `ha8_p
 
 ## Status (2026-10-30)
 User-confirmed: COM4 receiving ~100 frames/s and observed voltage rises on pressure. Factory-mode force precision not yet bench-characterized.
+
+
+## V3: no-weight circuit estimate (2026-10-30)
+
+The PC monitor adds **免砝码 · 电路** mode based on the AO converter manual:
+\`Uo = 0.1 * (1 + Rf/Rx)\`, using the measured AO-RES feedback resistance \`Rf\` and the IMS003-C10A manufacturer's conductance/force table. A no-load offset capture is recommended. No reference mass is required **for theoretical estimation**; precision is not guaranteed.
+
+**Power off all modules before measuring the empty R2 solder pads with an ohmmeter.** The module manual says this gives the current AO-RES feedback resistance; enter the measured value in kΩ. 300kΩ is a supplier *recommendation* for IMS-C10A small-range sensors, not necessarily the installed trim setting. Adjusting AO-RES changes the hardware and requires a new measurement.
+
+At 300kΩ the 2kg datasheet resistance (5kΩ) would require 6.1V, which the module cannot output. Around 150kΩ gives approximately 3.1V at 2kg on paper, but **the sensor is nominally rated 1kg** and the upper range is unverified.
+
+Run the updated PC program using \`py -3 gripper_monitor.py\`. Firmware and UART remain unchanged. See the separate note at \`docs/ao_converter_v3.md\`.

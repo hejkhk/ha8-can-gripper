@@ -15,7 +15,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from protocol import (PressureFrame, estimate_force_g, estimate_factory_force_g,
-                      factory_reference_ready, MANUFACTURER_POINTS, parse_frame, validate_points)
+                      factory_reference_ready, MANUFACTURER_POINTS, parse_frame, validate_points,
+                      feedback_resistor_valid, estimate_circuit_force_g)
 
 BAUD = 115200
 CAL_FILE = Path(__file__).with_name("calibration.json")
@@ -38,7 +39,8 @@ class GripperMonitor:
         self.zero_adc = None
         self.reference_adc = None
         self.reference_g = None
-        self.active_mode = "factory"  # 工厂曲线估算 / 多点实测
+        self.active_mode = "circuit"  # 电路模型免砝码 / 一点参考 / 多点实测
+        self.circuit_zero_adc = None
         self.last_frame = None
         self.last_received_monotonic = 0.0
         self.peak_g = 0.0
@@ -56,8 +58,9 @@ class GripperMonitor:
         self.status_text = tk.StringVar(value="未连接")
         self.point_g = tk.StringVar(value="0")
         self.reference_input_g = tk.StringVar(value="500")
+        self.rf_kohm_text = tk.StringVar(value="")
         self.factory_state_text = tk.StringVar(value="尚未采集零点 / 参考载荷")
-        self.method_text = tk.StringVar(value="厂家参考曲线 · 估算")
+        self.method_text = tk.StringVar(value="运放电路换算 · 估算（待填 Rf）")
         self.mark_time = time.monotonic()
         self.mark_count = 0
         self._closing = False
@@ -140,8 +143,28 @@ class GripperMonitor:
         self.cal_notebook.pack(fill="x")
         factory = ttk.Frame(self.cal_notebook, padding=8)
         measured = ttk.Frame(self.cal_notebook, padding=8)
-        self.cal_notebook.add(factory, text="厂家曲线 · 快速")
-        self.cal_notebook.add(measured, text="多点实测 · 精确")
+        circuit = ttk.Frame(self.cal_notebook, padding=8)
+        self.cal_notebook.add(circuit, text="免砝码 · 电路")
+        self.cal_notebook.add(factory, text="单点参考")
+        self.cal_notebook.add(measured, text="多点实测")
+        ttk.Label(circuit, text="按转换模块手册 Uo=0.1×(1+Rf/Rx) 与传感器厂家曲线反算。\n不需要已知受力，但必须知道板上 AO-RES 实际阻值。",
+                  foreground="#685a42", wraplength=305, justify="left").pack(anchor="w", pady=(0, 6))
+        resistor_row = ttk.Frame(circuit)
+        resistor_row.pack(fill="x", pady=4)
+        ttk.Label(resistor_row, text="AO-RES 实际电阻 Rf (kΩ)").pack(side="left")
+        ttk.Entry(resistor_row, textvariable=self.rf_kohm_text, width=8).pack(side="left", padx=(6, 0))
+        self.rf_kohm_text.trace_add("write", self._on_rf_changed)
+        ttk.Button(circuit, text="① 无负载采集零点（推荐）",
+                   command=self.capture_circuit_zero).pack(fill="x", pady=4)
+        self.circuit_state_text = tk.StringVar(value="未输入 Rf；无法显示绝对受力")
+        ttk.Label(circuit, textvariable=self.circuit_state_text, wraplength=305,
+                  foreground="#1863ac", justify="left").pack(anchor="w", pady=4)
+        ttk.Label(circuit, text="参考手册 IMS-C10A 小量程建议 300kΩ，但不能直接认定当前板子就是 300kΩ。",
+                  foreground="#666", wraplength=305, justify="left").pack(anchor="w", pady=3)
+        ttk.Label(circuit, text="断电后万用表测未焊 R2 两端阻值。若希望测到 2kg，理论上 Rf 需约≤160kΩ，且超出传感器标称 1kg。",
+                  foreground="#985500", wraplength=305, justify="left").pack(anchor="w", pady=3)
+        ttk.Label(circuit, text="⚠ 理论估算 ≠ 精确夹持力。电位器调节后必须更新 Rf。",
+                  foreground="#985500", wraplength=305, justify="left").pack(anchor="w", pady=3)
         self.cal_notebook.bind("<<NotebookTabChanged>>", self._on_mode_changed)
 
         ttk.Label(factory, text="使用厂家第2页电导-受力数据。\n需无载零点 + 1个已知载荷确定转换板增益。",
@@ -316,7 +339,7 @@ class GripperMonitor:
             self.force_text.set("-- g" if self._calibration_ready() else "待设置")
             self.newton_text.set("-- N")
         else:
-            prefix = "≈ " if self.active_mode == "factory" else ""
+            prefix = "≈ " if self.active_mode in ("factory", "circuit") else ""
             self.force_text.set(f"{prefix}{force:.1f} g")
             self.newton_text.set(f"{force * 0.00980665:.3f} N")
             self.peak_g = max(self.peak_g, force)
@@ -337,7 +360,8 @@ class GripperMonitor:
         x0, y0, x1, y1 = 65, 25, w - 20, h - 45
         canvas.create_rectangle(x0, y0, x1, y1, outline="#cad3dc")
         calibrated = self._calibration_ready()
-        unit = ("g力（厂家曲线估算）" if self.active_mode == "factory" else "g力（多点实测）") if calibrated else "V (电压，待设置)"
+        unit = ({"circuit":"g力（电路理论估算）", "factory":"g力（单点参考）",
+                 "measured":"g力（多点实测）"}.get(self.active_mode, "g力")) if calibrated else "V (电压，待设置)"
         canvas.create_text(x0, 10, anchor="w", text=unit, fill="#555")
         series = []
         if self.history:
@@ -384,19 +408,44 @@ class GripperMonitor:
                 self._chart_job = self.root.after(120, self._redraw_chart)
 
     def _calibration_ready(self):
+        if self.active_mode == "circuit":
+            return feedback_resistor_valid(self.rf_kohm_text.get())
         if self.active_mode == "factory":
             return factory_reference_ready(self.zero_adc, self.reference_adc, self.reference_g)
         return validate_points(self.cal_points)
 
     def _estimate(self, adc):
+        if self.active_mode == "circuit":
+            return estimate_circuit_force_g(adc, self.rf_kohm_text.get(), self.circuit_zero_adc)
         if self.active_mode == "factory":
             return estimate_factory_force_g(adc, self.zero_adc, self.reference_adc, self.reference_g)
         return estimate_force_g(adc, self.cal_points)
 
+    def _on_rf_changed(self, *_args):
+        if not hasattr(self, "circuit_state_text"):
+            return
+        ready = feedback_resistor_valid(self.rf_kohm_text.get())
+        zero = ("未采集，理论零位 0.100V" if self.circuit_zero_adc is None
+                else f"已采集，ADC {self.circuit_zero_adc:.1f}")
+        self.circuit_state_text.set(
+            f"Rf：{self.rf_kohm_text.get() if ready else '请输入 0～300 范围内阻值'} kΩ\n"
+            f"零位：{zero}\n"
+            + ("已启用理论受力估算（请实测核对）" if ready else "无法反算受力"))
+        self.clear_peak()
+
+    def capture_circuit_zero(self):
+        adc = self._average_current_adc()
+        if adc is None:
+            return
+        self.circuit_zero_adc = adc
+        self._on_rf_changed()
+        self.status_text.set(f"已采无载零点 ADC {adc:.1f}，仍需 Rf 才能反算受力")
+
     def _on_mode_changed(self, _event=None):
-        self.active_mode = "factory" if self.cal_notebook.index("current") == 0 else "measured"
-        self.method_text.set("厂家曲线估算 · 非实测精度" if self.active_mode == "factory"
-                             else "实测多点插值")
+        self.active_mode = ("circuit", "factory", "measured")[self.cal_notebook.index("current")]
+        self.method_text.set({"circuit":"厂家电路模型 · 仅理论估算",
+                              "factory":"厂家曲线 · 单点参考估算",
+                              "measured":"多点实测插值"}[self.active_mode])
         self.peak_g = 0.0
         self.peak_text.set("-- g")
         self.force_text.set("待设置")
@@ -510,10 +559,22 @@ class GripperMonitor:
                 raise ValueError("零点超出 ADC 范围")
             if self.reference_adc is not None and not factory_reference_ready(self.zero_adc, self.reference_adc, self.reference_g):
                 raise ValueError("厂家参考点数据不合法")
-            # 兼容 v1 的旧 calibration.json：已有多点数据时默认启用实测模式。
-            mode = data.get("mode", "measured" if validate_points(points) else "factory")
-            self.cal_notebook.select(1 if mode == "measured" else 0)
+            # 兼容 V1/V2 的旧 calibration.json，同时恢复电路模型 Rf 和零位。
+            circuit = data.get("circuit", {})
+            if not isinstance(circuit, dict):
+                raise ValueError("电路模型配置不合法")
+            rf = circuit.get("rf_kohm", None)
+            if rf is not None:
+                if not feedback_resistor_valid(rf):
+                    raise ValueError("保存的 AO-RES 阻值不合法")
+                self.rf_kohm_text.set(f"{float(rf):g}")
+            self.circuit_zero_adc = circuit.get("zero_adc", None)
+            if self.circuit_zero_adc is not None and not (0 <= float(self.circuit_zero_adc) <= 4095):
+                raise ValueError("电路模型零位超出 ADC 范围")
+            mode = data.get("mode", "measured" if validate_points(points) else "circuit")
+            self.cal_notebook.select({"circuit":0,"factory":1,"measured":2}.get(mode, 0))
             self._on_mode_changed()
+            self._on_rf_changed()
             if self.reference_g is not None:
                 self.reference_input_g.set(f"{self.reference_g:g}")
             self._display_points()
@@ -523,13 +584,15 @@ class GripperMonitor:
 
     def save_calibration(self):
         if not self._calibration_ready():
-            messagebox.showwarning("标定尚未完成", "厂家曲线需要0g零点和1个已知参考载荷；实测模式至少需要2个单调标定点。")
+            messagebox.showwarning("尚未设置", "免砝码模式需要实测 AO-RES 电阻值；单点参考模式需要零点+已知力；多点模式需要至少2点。")
             return
         payload = {
-            "version": 2, "unit": "gram-force", "mode": self.active_mode,
+            "version": 3, "unit": "gram-force", "mode": self.active_mode,
             "notes": "仅适用于当前传感器/可调转换模块/增益/夹爪机械结构。厂家曲线属于推算。",
             "points": self.cal_points if validate_points(self.cal_points) else [],
             "factory": {"zero_adc": self.zero_adc, "ref_adc": self.reference_adc, "ref_g": self.reference_g},
+            "circuit": {"rf_kohm": float(self.rf_kohm_text.get()) if feedback_resistor_valid(self.rf_kohm_text.get()) else None,
+                        "zero_adc": self.circuit_zero_adc},
         }
         try:
             CAL_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

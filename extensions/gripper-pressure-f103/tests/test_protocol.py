@@ -69,3 +69,37 @@ class ManufacturerCurveTests(unittest.TestCase):
         self.assertIsNone(estimate_factory_force_g(1744, 100, 101, 500))
         self.assertIsNone(estimate_factory_force_g(1744, 100, 1800, 0))
         self.assertIsNone(estimate_factory_force_g(1744, 100, 1800, 2100))
+
+
+class CircuitModelTests(unittest.TestCase):
+    def test_rf_validation(self):
+        from protocol import feedback_resistor_valid
+        for value in (150, "150", 0.001, 300):
+            self.assertTrue(feedback_resistor_valid(value))
+        for value in (None, "", "bad", float('nan'), 0, -5, 301):
+            self.assertFalse(feedback_resistor_valid(value))
+
+    def test_manual_theoretical_reference_points(self):
+        from protocol import estimate_circuit_force_g, MANUFACTURER_POINTS
+        rf_kohm = 150.0
+        for force_g, conductance in MANUFACTURER_POINTS:
+            voltage = 0.1 * (1 + rf_kohm * conductance)
+            adc = voltage / 3.3 * 4095
+            f = estimate_circuit_force_g(adc, rf_kohm)
+            self.assertIsNotNone(f)
+            self.assertAlmostEqual(f, force_g, delta=1e-6)
+
+    def test_current_offset_and_nonextrapolation(self):
+        from protocol import estimate_circuit_force_g
+        rf = 150.0
+        z = 137.0
+        self.assertEqual(estimate_circuit_force_g(z, rf, z), 0)
+        adc500 = z + (0.1 * rf * 0.0556) / 3.3 * 4095
+        self.assertAlmostEqual(estimate_circuit_force_g(adc500, rf, z), 500, delta=1e-6)
+        self.assertIsNone(estimate_circuit_force_g(4095, 150, z))
+        self.assertIsNone(estimate_circuit_force_g(123, None, z))
+
+    def test_300k_cannot_cover_2kg(self):
+        self.assertGreater(0.1 * (1 + 300 / 5), 3.3)
+        from protocol import estimate_circuit_force_g
+        self.assertLess(estimate_circuit_force_g(4095, 300), 1200)

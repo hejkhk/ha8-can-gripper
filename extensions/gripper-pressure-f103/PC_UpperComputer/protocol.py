@@ -124,3 +124,50 @@ def estimate_factory_force_g(adc: float, zero_adc: Optional[float],
     if conductance > full_scale_conductance:
         return None
     return _interpolate(conductance, [(c, f) for f, c in MANUFACTURER_POINTS])
+
+
+def feedback_resistor_valid(rf_kohm: object) -> bool:
+    """AO-RES feedback resistor: the module manual specifies 0..300 kΩ.
+
+    The exact in-circuit value must be measured with power removed.
+    """
+    try:
+        value = float(rf_kohm)
+    except (ValueError, TypeError):
+        return False
+    return math.isfinite(value) and 0 < value <= 300
+
+
+def estimate_circuit_force_g(adc: float, rf_kohm: object,
+                             zero_adc: Optional[float] = None, vdda: float = 3.3) -> Optional[float]:
+    """Force estimate without known-weight reference using seller's AO opamp formula.
+
+    Manual (2026-10-30, page 5): Uo = 0.1 * (1 + Rf/Rx), resistances in kΩ.
+    Datasheet: manufacturer conductance G=1/Rx in 1/kΩ versus force gf.
+
+    If a no-load ADC baseline was recorded, treat zero as G=0 and use
+    dU=Uo-Uzero; otherwise use the nominal 0.1 V reference from the manual.
+    This is only a *theoretical* estimate: FSR variation, hysteresis, AO saturation,
+    board gain and assumed VDDA are not characterized by the calculation.
+    """
+    try:
+        x = float(adc)
+        rf = float(rf_kohm)
+        zero = None if zero_adc is None else float(zero_adc)
+        vref = float(vdda)
+    except (ValueError, TypeError):
+        return None
+    if not (feedback_resistor_valid(rf) and math.isfinite(x)
+            and 0 <= x <= 4095 and math.isfinite(vref) and 0 < vref <= 3.6):
+        return None
+    if zero is not None and (not math.isfinite(zero) or not 0 <= zero <= 4095):
+        return None
+    voltage = x * vref / 4095.0
+    offset = 0.1 if zero is None else zero * vref / 4095.0
+    conductance = (voltage - offset) / (0.1 * rf)
+    if conductance <= 0:
+        return 0.0
+    points = [(g, f) for f, g in MANUFACTURER_POINTS]
+    if conductance > points[-1][0]:
+        return None
+    return _interpolate(conductance, points)
