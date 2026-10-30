@@ -63,6 +63,32 @@ class PressureIntegrationTests(unittest.TestCase):
         s.add(frame(1001, 190, 1), 10.22)
         self.assertIsNone(s.latest(10.23))
 
+    def test_fault_prevents_contact_claim_even_if_previous_samples_are_high(self):
+        s=PressureEvidence()
+        fill_zero(s)
+        for i in range(40):
+            s.add(frame(i+150, 300), 11.0+i*0.01)
+        self.assertIn("接触",s.evidence(11.4)[0])
+        s.add(frame(999, 300, 1), 11.41)
+        label,delta=s.evidence(11.42)
+        self.assertIn("不足或已过期",label)
+        self.assertIsNone(delta)
+
+    def test_sustained_pressure_never_claims_antislip(self):
+        s=PressureEvidence()
+        fill_zero(s)
+        for i in range(100):
+            s.add(frame(i+200,250), 11.0 + i*0.01)
+        label,delta=s.evidence(12.01)
+        self.assertIn("持续受压",label)
+        self.assertIn("未验证是否打滑",label)
+
+    def test_theoretical_force_is_unavailable_above_nominal_sensor_rating(self):
+        s=PressureEvidence()
+        fill_zero(s)
+        self.assertIsNotNone(s.theoretical_force_g(400))
+        self.assertIsNone(s.theoretical_force_g(4090))
+
     def test_pairing_requires_fresh_both_channels_and_zero(self):
         s=PressureEvidence()
         c=CurveRecorder()
