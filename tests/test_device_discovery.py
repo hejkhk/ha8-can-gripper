@@ -141,6 +141,27 @@ class PortDiscoveryGuiTests(unittest.TestCase):
         finally:
             app.destroy()
 
+    def test_unique_roles_are_assigned_without_opening_other_ports(self):
+        app=HA8UpperComputer()
+        app.withdraw()
+        try:
+            app.transport = type("FakeTransport", (), {"is_open":False})()
+            def fake_connect():
+                app.transport.is_open = True
+            with patch.object(app,"connect",side_effect=fake_connect) as connect:
+                with patch.object(app.pressure_lab,"connect_port") as pressure:
+                    app._finish_discovery([PortIdentity("COM4","pressure"),
+                                           PortIdentity("COM6","ha8",0),
+                                           PortIdentity("COM9","unknown")],None)
+            connect.assert_called_once()
+            pressure.assert_called_once_with("COM4")
+            self.assertEqual(app.port_var.get(),"COM6")
+            self.assertEqual(app.servo_id_var.get(),0)
+            self.assertIn("COM4",app.detect_status.get())
+            self.assertIn("COM6",app.detect_status.get())
+        finally:
+            app.destroy()
+
     def test_unknown_ports_do_not_attempt_connections(self):
         app=HA8UpperComputer()
         app.withdraw()
