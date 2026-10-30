@@ -17,3 +17,6 @@ calibration.json
 
 # Machine-specific, unverified force calibration (do not commit)
 calibration/
+
+# Auto exported experiment folders (local, may contain hardware identifiers)
+calibration_records/

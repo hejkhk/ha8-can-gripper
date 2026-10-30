@@ -46,7 +46,7 @@ from pressure_lab_panel import PressureLabPanel
 from serial_device_discovery import discover_ports, unique_selection
 
 APP_TITLE = "HA8 智能夹爪上位机"
-APP_VERSION = "3.5-beta"
+APP_VERSION = "3.7-beta"
 
 
 class HA8UpperComputer(tk.Tk):
@@ -626,6 +626,9 @@ class HA8UpperComputer(tk.Tk):
             self.log(f"ERROR 连接失败：{exc}")
 
     def disconnect(self):
+        lab=getattr(self,"pressure_lab",None)
+        if lab is not None and lab.recorder.active:
+            lab.stop_record()  # Save the synchronized run before the HA8 source disappears.
         self.stop_scan()
         self.stop_monitor()
         self.transport.close()
@@ -666,6 +669,13 @@ class HA8UpperComputer(tk.Tk):
             panel.phase is not None or (panel.estop_latched and panel.active_servo_id is not None)
         )
         external_hold = False
+        cmd = frame[2] if len(frame) >= 3 else -1
+        lab = getattr(self, "pressure_lab", None)
+        if lab is not None and lab.recorder.active and owner != "pressure_calibration":
+            passive = cmd in (CMD_PING, CMD_READ_DATA, CMD_MONITOR, 0x0A, 0x10)
+            # STOP is always allowed; it may be needed to abort calibration.
+            if not passive and cmd != 0x18:
+                raise RuntimeError("逐步压力标定采集中：其他页面不能同时发送运动/写配置指令")
         if busy and owner != 'auto_grip':
             cmd = frame[2] if len(frame) >= 3 else -1
             # Allow passive diagnostics; motion/configuration commands are exclusive.
