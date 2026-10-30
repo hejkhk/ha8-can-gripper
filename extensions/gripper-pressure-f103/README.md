@@ -46,3 +46,10 @@ The PC monitor adds **免砝码 · 电路** mode based on the AO converter manua
 At 300kΩ the 2kg datasheet resistance (5kΩ) would require 6.1V, which the module cannot output. Around 150kΩ gives approximately 3.1V at 2kg on paper, but **the sensor is nominally rated 1kg** and the upper range is unverified.
 
 Run the updated PC program using \`py -3 gripper_monitor.py\`. Firmware and UART remain unchanged. See the separate note at \`docs/ao_converter_v3.md\`.
+
+## V3 preset for current setup: Rf = 158 kΩ
+
+- For this user's AO-RES configuration, the PC monitor now starts with **158 kΩ** in the resistor field. This is an **assumed/set value** and must match the actual module; any previously saved `PC_UpperComputer/calibration.json` value takes precedence until the user updates it and clicks Save.
+- Ideal AO voltages for 0 / 50 / 100 / 200 / 500 / 1000 / 2000 gf: 0.100 / 0.19875 / 0.27556 / 0.42245 / 0.97778 / 1.71224 / 3.260 V.
+- When the no-load baseline has been captured, the program subtracts that recorded baseline instead of the ideal 0.100 V. Apply real load with stable contact area and geometry.
+- At 2 kg the ideal value is 3.26 V, only 40 mV below the claimed 3.3 V maximum; treat high readings as potentially saturated and note that nominal force range in the sensor datasheet is 1 kg.
