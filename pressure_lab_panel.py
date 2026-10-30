@@ -189,6 +189,8 @@ class PressureLabPanel(ttk.Frame):
         self.pressure_port.set(port)
         self.sensor = PressureEvidence(rf_kohm=158)
         self.recorder.stop()
+        self.capture = None
+        self.step_state.clear()
         self._previous_ha8 = None
         self.zero_text.set("⚠ 新连接：尚未归零；确认夹爪松开且压力片无载")
         self.connection_text.set(f"已连接 {port}，等待无载数据")
@@ -197,8 +199,11 @@ class PressureLabPanel(ttk.Frame):
         self._update_zero_controls()
 
     def disconnect(self):
+        if self.recorder.active:
+            self.stop_record()
         self._previous_ha8 = None
         self.recorder.stop()
+        self.step_state.clear()
         self.link.close()
         self.sensor = PressureEvidence(rf_kohm=158)
         self.zero_text.set("⚠ 压力连接已断开；下次连接后必须重新无载归零")
@@ -206,6 +211,8 @@ class PressureLabPanel(ttk.Frame):
         self.conn_btn.configure(text="连接压力模块")
         self.adc_text.set("— ADC")
         self.pressure_text.set("—")
+        self.live_force_text.set("已断开 · -- gf")
+        self.live_voltage_text.set("ADC -- · -- mV")
         self.evidence_text.set("压力模块已断开；本次标定已停止，重新连接后需归零")
         self._update_zero_controls()
 
@@ -219,6 +226,23 @@ class PressureLabPanel(ttk.Frame):
         if not self.link.is_open:
             return
         self.sensor.add(frame, at)
+        raw_force = None
+        if self.sensor.zero_adc is not None and frame.status == 0 and frame.adc < 4085:
+            raw_force = estimate_circuit_force_g(frame.adc, 158, self.sensor.zero_adc)
+        if self.capture is not None and self.capture.active:
+            try:
+                self.capture.pressure(frame, at, raw_force)
+            except OverflowError as exc:
+                self._end_capture_due_to_error(str(exc))
+        if frame.sequence % 10 == 0:
+            self.live_voltage_text.set(f"ADC {frame.adc} · {frame.voltage_mv} mV")
+            if frame.status or frame.adc >= 4085:
+                self.live_force_text.set("数据异常/饱和")
+            elif raw_force is None:
+                self.live_force_text.set("未校零/超范围")
+            else:
+                note = " 超标称量程" if raw_force > 1000 else ""
+                self.live_force_text.set(f"≈{raw_force:.0f} gf / {raw_force*0.00980665:.2f} N{note}")
         # Bad status flags are never accepted as force or contact evidence.
         if frame.status:
             self.connection_text.set(f"压力采集异常 flags=0x{frame.status:02X}")
@@ -258,6 +282,7 @@ class PressureLabPanel(ttk.Frame):
         # Zero accepted; discard all samples from the previous zero.
         if self.recorder.rows:
             self.recorder.rows.clear()
+        self.capture = None
             self.points_text.set("零点已更新；上一轮采样已清空")
             self._draw()
         self.zero_text.set(
@@ -278,6 +303,16 @@ class PressureLabPanel(ttk.Frame):
         angle = float(fields["angle_deg"])
         previous = self._previous_ha8
         self._previous_ha8 = (servo_id, now, angle)
+        self.last_ha8 = (now, servo_id, dict(fields))
+        if self.capture is not None and self.capture.active:
+            try:
+                self.capture.ha8(servo_id, fields, now,
+                                 self.app.auto_grip_panel.phase or "idle",
+                                 self.step_state.target)
+            except OverflowError as exc:
+                self._end_capture_due_to_error(str(exc))
+        if self.step_state.pending and self.capture is not None and self.capture.active:
+            self._observe_step(servo_id, angle, fields, now)
         closing_motion = observed_closing_motion(previous, servo_id, now, angle)
         phase = self.app.auto_grip_panel.phase or "idle"
         if phase == "gripping" and not closing_motion:
@@ -332,8 +367,15 @@ class PressureLabPanel(ttk.Frame):
         if self.recorder.rows and not messagebox.askyesno(
                 "覆盖当前实验", "开始新实验会清空尚未导出的曲线数据，确定继续？"):
             return
+        if self.app.auto_grip_panel.phase or self.app.auto_grip_panel.estop_latched:
+            messagebox.showwarning("禁止开始", "请先结束其他夹爪运动与软件停机锁定")
+            return
         self.recorder.start(self.trial.get())
-        self.points_text.set("采集中：请通过夹爪控制页做低速试验")
+        self.step_state.clear()
+        self.manual_closing.set(True)
+        self.capture = CalibrationRun(self.trial.get(), self.sensor.zero_adc, self.app.servo_id())
+        self.capture.event("start",zero_adc=self.sensor.zero_adc)
+        self.points_text.set("已开始：独立记录压力全部帧、HA8监控和每次步进")
         self.evidence_text.set("本轮已锁定无载零点；采集进行中不允许重新归零")
         self._update_zero_controls()
 
