@@ -603,6 +603,8 @@ class PressureLabPanel(ttk.Frame):
         self._job = self.after(350, self._tick)
 
     def shutdown(self):
+        if self.recorder.active:
+            self.stop_record()  # Closing the GUI must not silently discard experiment data.
         if self._job is not None:
             try:
                 self.after_cancel(self._job)
