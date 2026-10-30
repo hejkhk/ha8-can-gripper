@@ -12,6 +12,7 @@ from tkinter import ttk, messagebox, filedialog
 from serial.tools import list_ports
 
 from pressure_validation import PressureSerialLink, PressureEvidence, CurveRecorder
+from grip_force_calibration import ForceMap, DEFAULT_PATH
 
 
 class PressureLabPanel(ttk.Frame):
@@ -21,6 +22,13 @@ class PressureLabPanel(ttk.Frame):
         self.link = PressureSerialLink(self._thread_frame, self._thread_error)
         self.sensor = PressureEvidence(rf_kohm=158)
         self.recorder = CurveRecorder()
+        self.model = None
+        self.model_message = tk.StringVar(value="离线模型：尚未生成")
+        self.gap_a_angle = tk.StringVar()
+        self.gap_a_mm = tk.StringVar()
+        self.gap_b_angle = tk.StringVar()
+        self.gap_b_mm = tk.StringVar()
+        self._load_model()
         self.pressure_port = tk.StringVar(value="")
         self.connection_text = tk.StringVar(value="未连接压力模块")
         self.adc_text = tk.StringVar(value="— ADC")
@@ -76,6 +84,22 @@ class PressureLabPanel(ttk.Frame):
         self.stop_btn.pack(side="left", padx=4)
         ttk.Button(controls, text="导出 CSV", command=self.export_csv).pack(side="left", padx=5)
         ttk.Label(controls, textvariable=self.points_text).pack(side="left", padx=8)
+        model_box = ttk.LabelFrame(experiment, text="④ 采集一次 → 保存离线估算模型（仅实验）", padding=6)
+        model_box.pack(fill="x", pady=4)
+        buttons = ttk.Frame(model_box)
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="从本次数据生成并保存模型", command=self.make_model).pack(side="left")
+        ttk.Button(buttons, text="重载已存模型", command=self._load_model).pack(side="left", padx=6)
+        ttk.Label(model_box, textvariable=self.model_message, foreground="#815e12",
+                  wraplength=830).pack(anchor="w", pady=2)
+        gaps = ttk.Frame(model_box)
+        gaps.pack(fill="x")
+        for label, var in (("角度A°",self.gap_a_angle),("实测开口A mm",self.gap_a_mm),
+                           ("角度B°",self.gap_b_angle),("实测开口B mm",self.gap_b_mm)):
+            ttk.Label(gaps, text=label).pack(side="left", padx=(4,0))
+            ttk.Entry(gaps, textvariable=var, width=7).pack(side="left", padx=(2,4))
+        ttk.Label(model_box, text="毫米值需要人工测量；静止保持、未覆盖电流/角度不显示受力预测。",
+                  foreground="#815e12").pack(anchor="w")
 
         selectors = ttk.Frame(experiment)
         selectors.pack(fill="x", pady=(9, 3))
@@ -187,6 +211,19 @@ class PressureLabPanel(ttk.Frame):
 
     def on_ha8_monitor(self, servo_id, fields):
         phase = self.app.auto_grip_panel.phase or "idle"
+        if self.model is not None:
+            force = self.model.predict(float(fields["current_ma"])/1000,
+                                       float(fields["angle_deg"]), phase, int(fields["status"]))
+            gap = self.model.gap_mm(float(fields["angle_deg"]))
+            if force is None:
+                text = "离线估算：静止/未覆盖的工况，无法估计"
+            else:
+                distance = "，开口≈%.1f mm" % gap if gap is not None else "，开口毫米未标定"
+                text = "单指尖≈%.0f gf%s（未验证）" % (force, distance)
+            self.model_message.set(text)
+            if hasattr(self.app.auto_grip_panel, "model_force_text"):
+                self.app.auto_grip_panel.model_force_text.set(text)
+
         if self.recorder.add(time.monotonic(), servo_id, fields, self.sensor, phase):
             if len(self.recorder.rows) % 10 == 0:
                 self.points_text.set(f"已配对 {len(self.recorder.rows)} 点")
@@ -223,6 +260,44 @@ class PressureLabPanel(ttk.Frame):
         self.recorder.stop()
         self.points_text.set(f"已停止：配对 {len(self.recorder.rows)} 个样本")
         self._draw()
+
+    def _load_model(self):
+        try:
+            model = ForceMap.load()
+        except FileNotFoundError:
+            self.model = None
+            self.model_message.set("离线模型：尚未生成")
+            return
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            self.model = None
+            self.model_message.set(f"无效模型：{exc}")
+            return
+        self.model = model
+        self.model_message.set(f"载入 {len(model.points)} 条样本：仅闭合期间、原工况范围内估算")
+
+    def make_model(self):
+        if self.recorder.active:
+            messagebox.showwarning("先结束采集", "先结束数据采集再建立模型")
+            return
+        try:
+            model = ForceMap.train(self.recorder.rows)
+            gap_values = [var.get().strip() for var in
+                          (self.gap_a_angle, self.gap_a_mm, self.gap_b_angle, self.gap_b_mm)]
+            if any(gap_values):
+                if not all(gap_values):
+                    raise ValueError("夹口标定需填写两组完整的角度/开口毫米")
+                model = model.with_gaps([
+                    {"angle_deg":float(gap_values[0]),"gap_mm":float(gap_values[1])},
+                    {"angle_deg":float(gap_values[2]),"gap_mm":float(gap_values[3])}])
+            if DEFAULT_PATH.exists() and not messagebox.askyesno("覆盖模型",
+                    "将覆盖此前本机模型。确定是同一夹爪装配和受力工况？"):
+                return
+            model.save()
+        except (ValueError, OSError, TypeError) as exc:
+            messagebox.showerror("标定未完成", str(exc))
+            return
+        self.model = model
+        self.model_message.set(f"保存 {len(model.points)} 条样本；拆除压力传感器后仅用于未验证的闭合阶段参考")
 
     def export_csv(self):
         if not self.recorder.rows:
