@@ -150,8 +150,6 @@ class PressureLabPanel(ttk.Frame):
         if frame.adc >= 4085:
             self.connection_text.set("压力 ADC 接近饱和，数据不可靠")
             return
-        if at-self.sensor.samples[-1].at > 0.3:
-            return
         if frame.sequence % 10 == 0:
             self.adc_text.set(f"{frame.adc} ADC / {frame.voltage_mv} mV")
             gf = self.sensor.theoretical_force_g(frame.adc)
