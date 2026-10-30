@@ -49,16 +49,14 @@ class PressureSerialLink:
         self.close()
         conn = serial.Serial(port, 115200, timeout=0.15)
         self.conn = conn
-        self._stop.clear()
-        self._worker = threading.Thread(target=self._read, name="fsr-rx", daemon=True)
+        self._stop = threading.Event()  # New event per session: no cross-port reader race.
+        self._worker = threading.Thread(target=self._read, args=(conn, self._stop),
+                                        name="fsr-rx", daemon=True)
         self._worker.start()
 
-    def _read(self):
+    def _read(self, conn, stopped):
         try:
-            while not self._stop.is_set():
-                conn = self.conn
-                if conn is None:
-                    return
+            while not stopped.is_set():
                 raw = conn.readline()
                 if not raw or len(raw) > 96:
                     continue
@@ -70,7 +68,7 @@ class PressureSerialLink:
                 if frame is not None:
                     self.on_frame(frame, time.monotonic())
         except (OSError, serial.SerialException) as exc:
-            if not self._stop.is_set():
+            if not stopped.is_set():
                 self.on_error(exc)
 
     def close(self):
