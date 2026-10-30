@@ -170,6 +170,9 @@ class PressureLabPanel(ttk.Frame):
             messagebox.showwarning("无法采零点", str(exc))
 
     def check_contact(self):
+        if not self.link.is_open:
+            self.evidence_text.set("压力传感器未连接，无法交叉验证")
+            return
         label, delta = self.sensor.evidence()
         suffix = "" if delta is None else f"，相对零点 {delta:+.0f} ADC"
         self.evidence_text.set(label+suffix)
@@ -184,6 +187,9 @@ class PressureLabPanel(ttk.Frame):
         self.evidence_text.set("抓取动作已开始；压力仅记录，不参与控制")
 
     def on_grip_end(self, reason, confirmed_motion_stop=True):
+        if not self.link.is_open:
+            self.evidence_text.set("压力模块未连接；无法验证本次接触")
+            return
         if not confirmed_motion_stop:
             self.evidence_text.set("舵机停止未确认；压力不能证明安全抓稳")
             return
