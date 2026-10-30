@@ -234,6 +234,10 @@ class PressureLabPanel(ttk.Frame):
                 self.capture.pressure(frame, at, raw_force)
             except OverflowError as exc:
                 self._end_capture_due_to_error(str(exc))
+        if self.step_state.pending and (
+                frame.status != 0 or frame.adc >= 4085 or raw_force is None
+                or raw_force >= 900):
+            self._stop_step("压力数据异常或已接近标称1kg，终止本次步进")
         if frame.sequence % 10 == 0:
             self.live_voltage_text.set(f"ADC {frame.adc} · {frame.voltage_mv} mV")
             if frame.status or frame.adc >= 4085:
