@@ -43,6 +43,7 @@ from ha8_serial import HA8SerialTransport
 from grip_panel import GripPanel
 from auto_grip_panel import AutoGripPanel
 from pressure_lab_panel import PressureLabPanel
+from serial_device_discovery import discover_ports, unique_selection
 
 APP_TITLE = "HA8 智能夹爪上位机"
 APP_VERSION = "3.4-beta"
@@ -76,6 +77,7 @@ class HA8UpperComputer(tk.Tk):
         self.reg_history = {}
         self.samples = []
         self.expert_mode = tk.BooleanVar(value=False)
+        self.discovery_busy = False
 
         self.tx_ha8_count = 0
         self.rx_ha8_count = 0
@@ -188,7 +190,7 @@ class HA8UpperComputer(tk.Tk):
         self._set_advanced_mode(not self.show_advanced)
 
     def _build_connection(self, parent):
-        box = ttk.LabelFrame(parent, text="① 连接舵机", padding=10)
+        box = ttk.LabelFrame(parent, text="① 连接设备（自动识别两个 USB 串口）", padding=10)
         box.pack(fill="x")
         primary = ttk.Frame(box)
         primary.pack(fill="x")
@@ -203,6 +205,12 @@ class HA8UpperComputer(tk.Tk):
         self.conn_var = tk.StringVar(value="未连接")
         self.conn_label = ttk.Label(primary, textvariable=self.conn_var, style="BAD.TLabel")
         self.conn_label.pack(side="left", padx=5)
+        self.detect_btn = ttk.Button(box, text="自动识别并连接两设备",
+                                      command=self.auto_discover_devices)
+        self.detect_btn.pack(anchor="w", pady=(7, 2), padx=4)
+        self.detect_status = tk.StringVar(value="自动探测：先识别 F103 数据流，再用 HA8 Ping 验证舵机；不会发送运动命令")
+        ttk.Label(box, textvariable=self.detect_status, foreground="#555555",
+                  wraplength=980).pack(anchor="w", padx=4, pady=(0, 2))
 
         # Baud rate, device ID and low-level Ping are advanced settings.
         self.connection_details = ttk.Frame(box)
@@ -518,6 +526,71 @@ class HA8UpperComputer(tk.Tk):
         elif values:
             self.port_var.set(values[0])
 
+    def auto_discover_devices(self):
+        """Background probe avoids blocking Tk. Only scans when neither channel is open."""
+        if self.discovery_busy:
+            return
+        if self.transport.is_open or self.pressure_lab.link.is_open:
+            messagebox.showwarning("请先断开设备", "重新识别前先分别断开 HA8 和压力模块，避免占用端口或切换运动目标")
+            return
+        if self.auto_grip_panel.phase or self.auto_grip_panel.estop_latched:
+            messagebox.showwarning("设备处于故障锁定", "请先检查夹爪停止状态，不可在运动/故障锁定时自动连接")
+            return
+        ports = [p.device for p in list_ports.comports()]
+        if not ports:
+            messagebox.showwarning("没有串口", "没有找到 COM 设备，请检查 USB 连接和驱动")
+            return
+        try:
+            sid = self.servo_id()
+        except ValueError as exc:
+            messagebox.showwarning("舵机 ID 不正确", str(exc))
+            return
+        self.discovery_busy = True
+        self.detect_btn.configure(state="disabled")
+        self.detect_status.set(f"正在识别 {len(ports)} 个串口（只读采集 + HA8 Ping）…")
+        self.log("开始检测 USB 串口角色，不发送电机运动指令")
+        def worker():
+            try:
+                result = discover_ports(ports, servo_ids=(sid,))
+                self.ui_queue.put(("discovery_result", (result, None)))
+            except Exception as exc:
+                self.ui_queue.put(("discovery_result", ([], str(exc))))
+        threading.Thread(target=worker, name="ha8-device-discovery", daemon=True).start()
+
+    def _finish_discovery(self, results, error):
+        """Must execute on the Tk thread. Never guess when multiple ports match."""
+        self.discovery_busy = False
+        self.detect_btn.configure(state="normal")
+        if error:
+            self.detect_status.set(f"识别失败：{error}。可展开高级调试，手动选择 COM")
+            return
+        for item in results:
+            self.log(f"串口 {item.port}：{item.kind} {item.reason}")
+        selected = unique_selection(results)
+        ha8 = selected["ha8"]
+        pressure = selected["pressure"]
+        errors = []
+        if ha8 is not None:
+            self.port_var.set(ha8.port)
+            self.servo_id_var.set(ha8.servo_id)
+            self.serial_baud_var.set("115200")
+            self.connect()
+            if not self.transport.is_open:
+                errors.append("舵机已识别但连接失败")
+        if pressure is not None:
+            try:
+                self.pressure_lab.connect_port(pressure.port)
+            except Exception as exc:
+                errors.append(f"压力端口连接失败：{exc}")
+        labels = [
+            f"HA8：{ha8.port}（ID={ha8.servo_id}）" if ha8 else "HA8：未唯一识别",
+            f"压力片：{pressure.port}" if pressure else "压力片：未唯一识别",
+        ]
+        if errors:
+            labels.extend(errors)
+        self.detect_status.set("  |  ".join(labels))
+        self.log("设备识别结果：" + " | ".join(labels))
+
     def toggle_connection(self):
         if self.transport.is_open:
             self.disconnect()
@@ -530,6 +603,9 @@ class HA8UpperComputer(tk.Tk):
             messagebox.showwarning("未选择端口", "请选择官方舵机 USB 串口转接板对应的 COM 端口")
             return
         try:
+            if (self.pressure_lab.link.is_open and
+                    self.pressure_lab.pressure_port.get().strip().lower() == port.lower()):
+                raise RuntimeError("这个 COM 已分配给压力片，HA8 必须使用独立串口")
             baud = int(self.serial_baud_var.get())
             self.transport.open(port, baudrate=baud)
             self.protocol_parser.reset()
@@ -945,6 +1021,9 @@ class HA8UpperComputer(tk.Tk):
                 kind, value = self.ui_queue.get_nowait()
                 if kind == "serial_data":
                     self._handle_serial_data(value)
+                elif kind == "discovery_result":
+                    results, error = value
+                    self._finish_discovery(results, error)
                 elif kind == "pressure_frame":
                     frame, arrived_at = value
                     self.pressure_lab.on_pressure_frame(frame, arrived_at)
