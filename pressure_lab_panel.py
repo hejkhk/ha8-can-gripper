@@ -282,9 +282,9 @@ class PressureLabPanel(ttk.Frame):
         # Zero accepted; discard all samples from the previous zero.
         if self.recorder.rows:
             self.recorder.rows.clear()
-        self.capture = None
             self.points_text.set("零点已更新；上一轮采样已清空")
             self._draw()
+        self.capture = None
         self.zero_text.set(
             f"✓ 已无载归零：ADC {zero:.1f}，噪声≈{self.sensor.zero_noise_adc:.1f} ADC")
         self.evidence_text.set("零点已采集；保持无载稳定，再开始标定采集")
