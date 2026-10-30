@@ -72,6 +72,9 @@ class AutoGripPanel(ttk.Frame):
         ttk.Label(values, textvariable=self.angle_text, font=("Consolas", 24, "bold")).grid(
             row=1, column=1, sticky="w", pady=(2, 6))
         ttk.Label(status, textvariable=self.feedback_text, foreground="#555555").pack(anchor="w")
+        self.pressure_validation_text = tk.StringVar(value="压力验证：未连接（请到“压力验证 / 曲线”页设置）")
+        ttk.Label(status, textvariable=self.pressure_validation_text, foreground="#78521c",
+                  wraplength=800).pack(anchor="w", pady=(3, 0))
 
         limits = ttk.LabelFrame(main, text="③ 夹爪运动范围", padding=14)
         limits.pack(fill="x", pady=(0, 12))
@@ -231,6 +234,9 @@ class AutoGripPanel(ttk.Frame):
             self.session_min,self.session_max,self.session_hold=lo,hi,hold
             self._refresh_controls()
             self._move(lo,vel,power,sid)
+            lab = getattr(self.app, "pressure_lab", None)
+            if lab is not None:
+                lab.on_grip_start()  # Read-only experiment; no pressure control path.
             self.status_text.set('抓取中：等待接触判定，或在最小角度前停止')
         except Exception as e:
             if self.phase:
@@ -311,6 +317,10 @@ class AutoGripPanel(ttk.Frame):
         self._stop_sent = True
         self.status_text.set(f'{reason}；停止未确认，请使用硬件急停并人工检查')
         self.app.log(f'自动抓取测试：{reason}；STOP_UNCONFIRMED')
+        lab = getattr(self.app, "pressure_lab", None)
+        if lab is not None:
+            lab.on_grip_end(reason, confirmed_motion_stop=False)
+            self.pressure_validation_text.set(lab.evidence_text.get())
         self._refresh_controls()
 
     def _observe_stopping(self, now):
@@ -337,6 +347,10 @@ class AutoGripPanel(ttk.Frame):
                 f'{self._stop_reason}；反馈角度连续稳定（仅软件观测，实际停机及夹持力仍待验证）'
                 + ('；软件急停锁定中' if self.estop_latched else '')
             )
+            lab = getattr(self.app, "pressure_lab", None)
+            if lab is not None:
+                lab.on_grip_end(self._stop_reason)
+                self.pressure_validation_text.set("压力验证：" + lab.evidence_text.get())
             self._refresh_controls()
 
     def emergency_stop(self):
