@@ -8,25 +8,13 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
 from statistics import median
 import csv
 import math
-import sys
 import threading
 import time
 import serial
-
-_MODULE = Path(__file__).resolve().parent / "extensions/gripper-pressure-f103/PC_UpperComputer/protocol.py"
-_spec = spec_from_file_location("_ha8_f103_pressure_protocol", _MODULE)
-if _spec is None or _spec.loader is None:
-    raise ImportError("F103 pressure protocol module is missing")
-_protocol = module_from_spec(_spec)
-sys.modules[_spec.name] = _protocol
-_spec.loader.exec_module(_protocol)
-parse_frame = _protocol.parse_frame
-estimate_circuit_force_g = _protocol.estimate_circuit_force_g
+from pressure_protocol import parse_frame, estimate_circuit_force_g
 
 
 class PressureSerialLink:
