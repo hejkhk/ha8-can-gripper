@@ -13,6 +13,9 @@ from serial.tools import list_ports
 
 from pressure_validation import PressureSerialLink, PressureEvidence, CurveRecorder
 from grip_force_calibration import ForceMap, DEFAULT_PATH, observed_closing_motion
+from calibration_capture import CalibrationRun, StepMotionState
+from pressure_protocol import estimate_circuit_force_g
+from ha8_protocol import HA8Protocol, STOP_HOLD
 
 
 class PressureLabPanel(ttk.Frame):
@@ -22,6 +25,13 @@ class PressureLabPanel(ttk.Frame):
         self.link = PressureSerialLink(self._thread_frame, self._thread_error)
         self.sensor = PressureEvidence(rf_kohm=158)
         self.recorder = CurveRecorder()
+        self.capture = None
+        self.step_state = StepMotionState()
+        self.last_ha8 = None
+        self.live_force_text = tk.StringVar(value="未归零 · -- gf")
+        self.live_voltage_text = tk.StringVar(value="ADC -- · -- mV")
+        self.step_status_text = tk.StringVar(value="等待归零并开始采集")
+        self.confirm_mechanism = tk.BooleanVar(value=False)
         self.model = None
         self.model_message = tk.StringVar(value="离线模型：尚未生成")
         self.gap_a_angle = tk.StringVar()
@@ -73,6 +83,14 @@ class PressureLabPanel(ttk.Frame):
         self.zero_btn.pack(side="left")
         ttk.Button(row, text="检查当前压力接触", command=self.check_contact).pack(side="left", padx=8)
         ttk.Label(row, textvariable=self.zero_text).pack(side="left", padx=10)
+        live = ttk.Frame(readouts)
+        live.pack(fill="x", pady=(6, 4))
+        ttk.Label(live, text="实时指尖理论受力：",font=("Microsoft YaHei UI",11)).pack(side="left")
+        ttk.Label(live,textvariable=self.live_force_text,font=("Consolas",23,"bold"),
+                  foreground="#185d94").pack(side="left")
+        ttk.Label(live,textvariable=self.live_voltage_text).pack(side="left",padx=18)
+        ttk.Label(readouts,text="理论估计：Rf=158kΩ。传感器标称1kg；厂家2kg曲线点不是额定测力范围。",
+                  foreground="#ad4516",wraplength=1000).pack(anchor="w")
         ttk.Label(readouts, textvariable=self.evidence_text,
                   foreground="#a15311", wraplength=900).pack(anchor="w")
 
@@ -84,12 +102,25 @@ class PressureLabPanel(ttk.Frame):
         ttk.Entry(controls, textvariable=self.trial, width=16).pack(side="left", padx=(5, 12))
         self.start_btn = ttk.Button(controls, text="② 开始标定采集（先归零）", command=self.start_record)
         self.start_btn.pack(side="left", padx=4)
-        self.stop_btn = ttk.Button(controls, text="结束采集", command=self.stop_record)
+        self.stop_btn = ttk.Button(controls, text="完成并自动导出", command=self.stop_record)
         self.stop_btn.pack(side="left", padx=4)
-        ttk.Button(controls, text="导出 CSV", command=self.export_csv).pack(side="left", padx=5)
+        ttk.Button(controls, text="重新导出全部 CSV", command=self.export_csv).pack(side="left", padx=5)
         ttk.Label(controls, textvariable=self.points_text).pack(side="left", padx=8)
         ttk.Checkbutton(experiment, text="手动位置小步闭合也作为训练样本（仅标记；不发电机指令）",
                         variable=self.manual_closing).pack(anchor="w")
+        step_area = ttk.LabelFrame(experiment, text="手动逐步标定 · 每次点击仅闭合1°", padding=8)
+        step_area.pack(fill="x",pady=6)
+        ttk.Checkbutton(step_area,text="已确认独立硬件急停、闭合方向、机械限位和安全距离",
+                        variable=self.confirm_mechanism).pack(anchor="w")
+        self.step_btn=ttk.Button(step_area,text="闭合 1°（单次）",command=self.step_one_degree)
+        self.step_btn.pack(side="left",pady=6,padx=(0,12))
+        self.finish_btn=ttk.Button(step_area,text="完成记录并自动导出",command=self.stop_record)
+        self.finish_btn.pack(side="left",pady=6)
+        ttk.Label(step_area,textvariable=self.step_status_text,foreground="#844923",
+                  wraplength=560).pack(side="left",padx=12)
+        ttk.Label(experiment,text="每一步必须收到稳定到位反馈。理论受力接近标称1kg时拒绝继续步进，"
+                  "可在任意时刻完成记录；不可仅凭软件停机代替独立断电。",
+                  foreground="#a33317",wraplength=920).pack(anchor="w")
         model_box = ttk.LabelFrame(experiment, text="④ 采集一次 → 保存离线估算模型（仅实验）", padding=6)
         model_box.pack(fill="x", pady=4)
         buttons = ttk.Frame(model_box)
