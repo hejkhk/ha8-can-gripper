@@ -15,11 +15,11 @@ class CalibrationCsvTests(unittest.TestCase):
         run=CalibrationRun("试验 1",123,0,start_mono=50.0,start_unix=1730000000.0)
         for i in range(100):
             frame=PressureFrame(i,1000+10*i,123+i,100+i,0)
-            run.pressure(frame,50.01*i,100+i)
+            run.pressure(frame,50.0+0.01*i,100+i)
         for i in range(10):
             run.ha8(0,{"angle_deg":90-i*.1,"current_ma":500+i,
                 "voltage_mv":12000,"power_mw":100,"status":0,
-                "temperature_adc":100,"turn":0},50.1*i,"gripping",89)
+                "temperature_adc":100,"turn":0},50.0+0.1*i,"gripping",89)
         run.event("step_command",at=50.5,servo_id=0,target_deg=89)
         run.stop()
         with tempfile.TemporaryDirectory() as tmp:
