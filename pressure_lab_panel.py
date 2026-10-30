@@ -380,10 +380,109 @@ class PressureLabPanel(ttk.Frame):
         self._update_zero_controls()
 
     def stop_record(self):
+        if self.step_state.pending:
+            self._stop_step("用户结束本次实验")
+        if self.capture is not None and self.capture.active:
+            self.capture.event("finish_by_operator")
+            self.capture.stop()
         self.recorder.stop()
-        self.points_text.set(f"已停止：配对 {len(self.recorder.rows)} 个样本")
+        if self.capture is None:
+            self.points_text.set("尚未开始实验")
+            self._update_zero_controls()
+            return
+        try:
+            folder = self.capture.export(self.recorder.rows)
+            self.points_text.set(f"已导出 {folder}：压力 {len(self.capture.pressure_rows)}，"
+                                 f"HA8 {len(self.capture.ha8_rows)}，配对 {len(self.recorder.rows)}")
+            messagebox.showinfo("已保存全部原始数据",
+                f"CSV 文件夹：\n{folder}\n\n01_pressure_f103.csv：压力每帧\n"
+                "02_ha8_servo.csv：电流/角度监控\n03_step_events.csv：点击操作\n"
+                "04_paired_curve.csv：同步曲线\nmetadata.json：实验说明")
+        except (OSError, ValueError) as exc:
+            self.points_text.set("保存失败，数据仍在内存；检查磁盘后点击重新导出")
+            messagebox.showerror("导出失败",str(exc))
         self._update_zero_controls()
         self._draw()
+
+    def _end_capture_due_to_error(self,reason):
+        if self.capture is None:return
+        self.capture.stop()
+        self.recorder.stop()
+        if self.step_state.pending:
+            self._stop_step("数据缓存异常，已拒绝继续运动")
+        self.step_status_text.set(f"记录中断：{reason}；请完成导出")
+        self._update_zero_controls()
+
+    def _stop_step(self,reason):
+        if not self.step_state.pending:return
+        target = self.step_state.target
+        self.step_state.clear()
+        if self.capture is not None and self.capture.active:
+            self.capture.event("step_stop",reason=reason,target_deg=target)
+        try:
+            self.app.send_ha8(HA8Protocol.stop(self.app.servo_id(),STOP_HOLD,300),
+                              "实验中止步进（软件保持）",owner="pressure_calibration")
+        except Exception as exc:
+            self.step_status_text.set(f"STOP发送失败：{exc}。使用独立硬件急停")
+            return
+        self.step_status_text.set(reason+"；已发软件停止，仍需确认实际停机")
+
+    def _observe_step(self,servo_id,angle,fields,now):
+        if self.capture is None or servo_id != self.capture.servo_id:return
+        state=self.step_state.observe(angle,now,fields["status"])
+        if state=="complete":
+            self.capture.event("step_arrived",at=now,angle_deg=angle)
+            self.step_status_text.set(f"反馈已到位 {angle:.1f}°；可再点击一次")
+        elif state in ("fault","timeout"):
+            self._stop_step(f"目标未正常完成（{state}）")
+        elif state=="moving":
+            self.step_status_text.set(f"正在前往 {self.step_state.target:.1f}°，请勿重复点击")
+
+    def step_one_degree(self):
+        try:
+            if not self.recorder.active or self.capture is None or not self.capture.active:
+                raise RuntimeError("先压力归零，再开始本轮标定采集")
+            if not self.confirm_mechanism.get():
+                raise RuntimeError("先确认硬件急停、闭合方向及安全夹爪限位")
+            if self.step_state.pending:
+                raise RuntimeError("前一次1°运动还未反馈到位")
+            last=self.sensor.latest() if self.link.is_open else None
+            if last is None:
+                raise RuntimeError("压力传感器串口异常或数据过期，禁止动作")
+            force=self.sensor.theoretical_force_g(last.adc)
+            if force is None or force>=900:
+                raise RuntimeError("传感器接近标称1kg或估算无效，禁止继续步进；请完成记录")
+            panel=self.app.auto_grip_panel
+            sid=panel._preflight()
+            if sid!=self.capture.servo_id or self.last_ha8 is None:
+                raise RuntimeError("HA8 监控舵机与实验舵机不一致")
+            t,read_sid,fields=self.last_ha8
+            if read_sid!=sid or time.monotonic()-t>0.4 or int(fields["status"])!=0:
+                raise RuntimeError("HA8反馈已超时或状态异常")
+            lo,hi,vel,power,hold=panel._parameters()
+            angle=float(fields["angle_deg"])
+            target=round(angle-1.0,1)
+            if not lo<=angle<=hi or target<lo+0.3:
+                raise RuntimeError(f"已接近经过实机确认的最小角度 {lo:g}°")
+            if power<=0:raise RuntimeError("功率上限必须大于0")
+            velocity=min(5.0,vel)
+            used_power=min(1500,power)
+            frame=HA8Protocol.move(sid,target,multiturn=True,mode="velocity",
+                                   velocity_dps=velocity,t_acc_ms=200,t_dec_ms=200,
+                                   power_mw=used_power)
+            self.app.send_ha8(frame,f"人工逐步闭合 1° → {target:.1f}°",
+                              owner="pressure_calibration")
+            now=time.monotonic()
+            self.step_state.begin(target,now)
+            self.capture.event("step_command",at=now,servo_id=sid,angle_before_deg=angle,
+                               target_deg=target,velocity_dps=velocity,power_mW=used_power,
+                               force_gf_theoretical=force)
+            self.step_status_text.set(f"已发送1° → {target:.1f}°；等待稳定到位")
+        except (ValueError,TypeError,RuntimeError) as exc:
+            self.step_status_text.set(str(exc))
+            messagebox.showwarning("1° 步进被拒绝",str(exc))
+        self._update_zero_controls()
+
 
     def _load_model(self):
         try:
@@ -424,18 +523,17 @@ class PressureLabPanel(ttk.Frame):
         self.model_message.set(f"保存 {len(model.points)} 条样本；拆除压力传感器后仅用于未验证的闭合阶段参考")
 
     def export_csv(self):
-        if not self.recorder.rows:
-            messagebox.showinfo("无数据", "先开始采集，再进行一次夹爪试验")
+        if self.recorder.active:
+            messagebox.showwarning("尚未完成记录", "点击完成记录后才会自动导出")
             return
-        path = filedialog.asksaveasfilename(title="导出 HA8 电流-压力实验数据",
-                                            defaultextension=".csv",
-                                            filetypes=[("CSV","*.csv")])
-        if path:
-            try:
-                self.recorder.export_csv(path)
-                self.points_text.set(f"已保存 {len(self.recorder.rows)} 点")
-            except OSError as exc:
-                messagebox.showerror("保存失败", str(exc))
+        if self.capture is None:
+            messagebox.showinfo("无数据","尚无本次实验")
+            return
+        try:
+            folder=self.capture.export(self.recorder.rows)
+            messagebox.showinfo("已导出全部 CSV",f"实验目录：{folder}")
+        except (OSError,ValueError) as exc:
+            messagebox.showerror("导出失败",str(exc))
 
     def _draw(self):
         canvas = self.chart
@@ -484,8 +582,17 @@ class PressureLabPanel(ttk.Frame):
         can_start = (self.link.is_open and ready and self.app.transport.is_open
                      and self.app.monitor_running and not self.recorder.active)
         self.start_btn.configure(state="normal" if can_start else "disabled")
+        running=self.recorder.active and self.capture is not None and self.capture.active
+        if hasattr(self,"step_btn"):
+            self.step_btn.configure(state="normal" if running and not self.step_state.pending
+                                    and self.confirm_mechanism.get() else "disabled")
+        if hasattr(self,"finish_btn"):
+            self.finish_btn.configure(state="normal" if running else "disabled")
 
     def _tick(self):
+        if self.step_state.pending and self.step_state.sent_at is not None and (
+                time.monotonic()-self.step_state.sent_at>3.0):
+            self._stop_step("1°目标反馈超时")
         self._update_zero_controls()
         if not self.link.is_open or self.sensor.latest() is None:
             self.adc_text.set("— ADC")
