@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from grip_force_calibration import ForceMap
+from grip_force_calibration import ForceMap, observed_closing_motion
 
 class ForceModelTests(unittest.TestCase):
     def rows(self):
@@ -34,3 +34,12 @@ class ForceModelTests(unittest.TestCase):
         r=self.rows()
         for p in r:p.theoretical_gf=500
         with self.assertRaises(ValueError): ForceMap.train(r)
+
+    def test_closing_requires_motion_and_matching_servo(self):
+        prev = (0, 10.0, 100.0)
+        self.assertTrue(observed_closing_motion(prev, 0, 10.1, 99.2))
+        self.assertFalse(observed_closing_motion(prev, 0, 10.1, 100.0))
+        self.assertFalse(observed_closing_motion(prev, 0, 10.1, 100.3))
+        self.assertFalse(observed_closing_motion(prev, 1, 10.1, 99.2))
+        self.assertFalse(observed_closing_motion(prev, 0, 11.2, 90.0))
+        self.assertFalse(observed_closing_motion(None, 0, 10.1, 99.2))
