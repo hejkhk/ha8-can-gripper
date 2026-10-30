@@ -16,6 +16,9 @@ class SourceSyntaxTests(unittest.TestCase):
             "grip_estimator.py",
             "grip_panel.py",
             "auto_grip_panel.py",
+            "pressure_validation.py",
+            "pressure_lab_panel.py",
+            "serial_device_discovery.py",
             "legacy/usb_can_cdc.py",
             "legacy/f103_uart_bridge.py",
         ]
