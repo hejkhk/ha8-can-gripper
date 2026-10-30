@@ -1,1 +1,1 @@
-"""Archived HA8 USB-CAN and F103-CAN transport implementations.\n\nThe current Windows app does not import this package.\n"""\n
+"""Historical USB-CAN and F103 CAN-bridge drivers (not the current HA8 path)."""
