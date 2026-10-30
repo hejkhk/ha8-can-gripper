@@ -13,7 +13,7 @@ except ImportError:
     serial.PARITY_NONE = "N"
     sys.modules["serial"] = serial
 
-from f103_uart_bridge import F103UartBridge
+from legacy.f103_uart_bridge import F103UartBridge
 from ha8_protocol import HA8Protocol, ResponseStreamParser
 
 
