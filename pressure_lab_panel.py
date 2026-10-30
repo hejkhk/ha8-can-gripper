@@ -97,7 +97,7 @@ class PressureLabPanel(ttk.Frame):
         self.combo.configure(values=ports)
         selected = self.pressure_port.get()
         if selected not in ports:
-            ha8_port = self.app.port_var.get().strip()
+            ha8_port = self.app.port_var.get().strip() if self.app.transport.is_open else ""
             choices = [p for p in ports if p.lower() != ha8_port.lower()]
             self.pressure_port.set(choices[0] if choices else "")
 
@@ -105,24 +105,32 @@ class PressureLabPanel(ttk.Frame):
         if self.link.is_open:
             self.disconnect()
             return
-        port = self.pressure_port.get().strip()
-        ha8_port = self.app.port_var.get().strip()
+        try:
+            self.connect_port(self.pressure_port.get().strip())
+        except Exception as exc:
+            messagebox.showerror("压力模块连接失败", str(exc))
+
+    def connect_port(self, port: str):
+        """Shared entry for auto identification and manual port selection."""
+        port = str(port).strip()
         if not port:
-            messagebox.showwarning("请选择串口", "压力传感器需要第二个 USB-TTL COM 口")
-            return
-        if port.lower() == ha8_port.lower():
-            messagebox.showerror("串口冲突", "压力模块和 HA8 舵机不能使用同一个串口")
-            return
+            raise ValueError("压力传感器需要单独的 USB-TTL COM 口")
+        ha8_port = self.app.port_var.get().strip()
+        if (self.app.transport.is_open and port.casefold()==ha8_port.casefold()):
+            raise ValueError("压力模块不能占用已连接 HA8 的串口")
+        if self.link.is_open:
+            raise RuntimeError("压力串口已经连接，请先断开再切换")
         try:
             self.link.open(port)
-            self.sensor = PressureEvidence(rf_kohm=158)
-            self.recorder.stop()
-            self.connection_text.set(f"已连接 {port}，正在接收")
-            self.conn_btn.configure(text="断开压力模块")
-            self.evidence_text.set("请确认压力片无载，再采集零点")
-        except Exception as exc:
-            self.connection_text.set(f"连接失败：{exc}")
-            messagebox.showerror("压力模块连接失败", str(exc))
+        except Exception:
+            self.connection_text.set(f"连接 {port} 失败")
+            raise
+        self.pressure_port.set(port)
+        self.sensor = PressureEvidence(rf_kohm=158)
+        self.recorder.stop()
+        self.connection_text.set(f"已连接 {port}，等待数据")
+        self.conn_btn.configure(text="断开压力模块")
+        self.evidence_text.set("请确认压力片无载，再采集零点")
 
     def disconnect(self):
         self.recorder.stop()
