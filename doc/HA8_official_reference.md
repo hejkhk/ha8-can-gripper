@@ -24,6 +24,15 @@
 
 请注意上述堵转/动态/额定工况**不同**，不能直接拿峰值电流和堵转扭矩除出常数作为动态转矩系数。
 
-## 当前项目连接
+## 当前项目连接（修订：2026-11-11）
 
-实际主机使用 `USB-CAN → CAN → CTS100M → UART TXD/RXD → 舵机扩展板 → HA8 本体单线SIGNAL`，不要把 HA8 本体 3Pin 的 S 信号误认为独立 TXD/RXD。
+**当前实际推荐链路是两条独立 USB COM，而不是历史 CAN/CTS100M。**
+
+```text
+Windows → USB → HA8 官方 USB 转接板 → HA8-U35H-M 的 VIN / IO(S) / GND
+Windows ← USB-TTL ← STM32F103 USART1 ← 压力转换板 AO ← 指尖 FSR
+```
+
+此前“USB-CAN → CTS100M → 舵机”的描述为**历史方案**，不再作为当前接线。官方转接板最新一页原理图给出 CN1/CN2 **1=VIN、2=IO、3=GND**（连接器物理方向仍需实物核实）。
+
+完整交接：[PROJECT_HANDOFF_FULL_2026-11-11.md](PROJECT_HANDOFF_FULL_2026-11-11.md)。下一阶段拟由 STM32 通过受保护的单线半双工收发器直接连接 HA8 S，**该功能尚未开发/验证**。
